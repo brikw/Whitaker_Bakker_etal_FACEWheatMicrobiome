@@ -1,0 +1,2187 @@
+---
+title: "FACE Microbiome Data"
+output:
+    html_document:
+        toc: true
+        toc_depth: 3
+        toc_float: true
+author: "Briana K. Whitaker"
+date: "`r Sys.Date()`"
+---
+\fontsize{9}{10}
+---
+
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(
+                      warning=FALSE, message=FALSE)
+```
+
+
+* Run using `r version[['version.string']] `.
+
+# Objective
+This document reports on the Alpha & Beta diversity analysis of Microbiome data (16S and ITS) from Glenn wheat samples grown in the same field as Fusarium-inoculated wheat heads, but for plants that themselves were not acutally inoculated (Years 2017 and 2018). 
+
+
+
+## Details
+Field experiment was conducted as part of SOY-FACE ambient and elevated CO2 experiments at UIUC. Fungal biomass was constructed in 2017 from a single gene of Fusarium and single gene of wheat, using Bio_Rad, and expressed as a ratio. Fungal biomass in 2018 was constructed from multiple genes using a Fluidigm, also expressed as a ratio. Microbiome data was processed using Illumina MiSeq and DADA2.
+
+
+# 0) Load Packages, functions, source scripts
+```{r, echo=FALSE, results='hide', include=FALSE} 
+x<-c("ggplot2", "dplyr", "lme4", "reshape2", "car", "dada2", "phyloseq", 
+     "vegan", "DESeq2", "RRPP", "egg")
+lapply(x, require, character.only = TRUE)
+require(speedyseq)
+
+require(RColorBrewer)
+display.brewer.pal(4, "Set1")
+brewer.pal(4, "Set1")
+co2_color <- c("#377EB8", "#E41A1C") 
+tissue_color <- c("#4DAF4A", "#984EA3") 
+display.brewer.pal(6, "BuPu")
+brewer.pal(6, "BuPu")
+collect_color <- c("#9EBCDA", "#8C96C6", "#8856A7", "#810F7C") 
+
+display.brewer.pal(8, "YlGn") #and 2nd color borrowed from Greens palette
+brewer.pal(8, "YlGn")
+leaf_collect_color <- c("#D9F0A3",  "#A1D99B", "#41AB5D", "#005A32") 
+
+
+#Load functions
+source("./code/multiplot.function.R")
+#add 'not in' function
+`%nin%` = Negate(`%in%`)
+
+# function for PCoA ellipses - 
+veganCovEllipse <- function (cov, center = c(0, 0), scale = 1, npoints = 100)   {
+  theta <- (0:npoints) * 2 * pi/npoints
+  Circle <- cbind(cos(theta), sin(theta))
+  t(center + scale * t(Circle %*% chol(cov)))    }
+
+# function for protected geometric means
+gm_mean_protected <- function(x) {
+  if (all(x == 0)) {
+    return (0)
+  }
+  exp(mean(log(x[x != 0])))
+}
+
+mean.rel.func <- function(SbySdata) {
+  site.reads <- apply(SbySdata, 1, sum)
+  MRA <- apply(SbySdata/site.reads, 2, mean)
+  return(MRA)
+}
+
+#set seed
+#runif(1, min = 0, max = 1000)
+set.seed(290)
+
+# set ggplot2 theme
+theme_set(theme_bw(base_size=14)) 
+theme_update(panel.grid.major=element_line(0), panel.grid.minor=element_line(0))
+```
+
+
+# 1) Load data
+* Adjusted phyloseq objects (filtered and unfiltered) to make them compatible with DESeq2 pipeline.
+```{r, results = 'hide'}
+# # perform some basic editing on the filtered ps objects
+# load("./data/FACE_phyloseq_bacteria.Y17.RData")
+# ps_17b <- bacteria.Y17.abund.ps
+# load("./data/FACE_phyloseq_bacteria.Y18.RData")
+# ps_18b <- bacteria.Y18.abund.ps
+# load("./data/FACE_phyloseq_fungi.Y17.RData")
+# ps_17f <- fungi.Y17.abund.ps
+# load("./data/FACE_phyloseq_fungi.Y18.RData")
+# ps_18f <- fungi.Y18.abund.ps
+# 
+# # perform some basic editing on the unfiltered ps objects
+# # NOTE -- easier to do editing steps with same object names as filtered, and just rename the loaded back in datasets
+# load("./data/FACE_unfiltered_b17.ps.RData")
+# ps_17b <- bacteria.Y17.samples.ps
+# load("./data/FACE_unfiltered_b18.ps.RData")
+# ps_18b <- bacteria.Y18.samples.ps
+# load("./data/FACE_unfiltered_f17.ps.RData")
+# ps_17f <- fungi.Y17.samples.ps
+# load("./data/FACE_unfiltered_f18.ps.RData")
+# ps_18f <- fungi.Y18.samples.ps
+# 
+# #yr2017 <- read.csv("./data/2017 FACE field data Biomass and DON.csv", stringsAsFactors = TRUE)
+# #yr2018 <- read.csv("./data/2018 Data Biomass and Toxin.csv", stringsAsFactors = TRUE)
+# 
+# require(speedyseq)
+# ps_17b <- ps_17b %>% rename_sample_data(Label.Bakker = ï..Label.Bakker )  #Windows encoded column name
+# ps_17f <- ps_17f %>% rename_sample_data(Label.Bakker = ï..Label.Bakker )
+# ps_18b <- ps_18b %>% rename_sample_data(Label.Bakker = ï..Label.Bakker )
+# ps_18f <- ps_18f %>% rename_sample_data(Label.Bakker = ï..Label.Bakker )
+# 
+# #convert relevant variables to factors
+# sample_data(ps_17b)$CO2 <- factor(sample_data(ps_17b)$CO2)
+# sample_data(ps_17b)$collect <- factor(sample_data(ps_17b)$collect)
+# sample_data(ps_17b)$tissue <- factor(sample_data(ps_17b)$tissue)
+# sample_data(ps_17b)$plot <- factor(sample_data(ps_17b)$plot)
+# sample_data(ps_17b)$plant <- factor(sample_data(ps_17b)$plant)
+# 
+# sample_data(ps_17f)$CO2 <- factor(sample_data(ps_17f)$CO2)
+# sample_data(ps_17f)$collect <- factor(sample_data(ps_17f)$collect)
+# sample_data(ps_17f)$tissue <- factor(sample_data(ps_17f)$tissue)
+# sample_data(ps_17f)$plot <- factor(sample_data(ps_17f)$plot)
+# sample_data(ps_17f)$plant <- factor(sample_data(ps_17f)$plant)
+# 
+# sample_data(ps_18b)$CO2 <- factor(sample_data(ps_18b)$CO2)
+# sample_data(ps_18b)$collect <- factor(sample_data(ps_18b)$collect)
+# sample_data(ps_18b)$tissue <- factor(sample_data(ps_18b)$tissue)
+# sample_data(ps_18b)$plot <- factor(sample_data(ps_18b)$plot)
+# sample_data(ps_18b)$plant <- factor(sample_data(ps_18b)$plant)
+# 
+# sample_data(ps_18f)$CO2 <- factor(sample_data(ps_18f)$CO2)
+# sample_data(ps_18f)$collect <- factor(sample_data(ps_18f)$collect)
+# sample_data(ps_18f)$tissue <- factor(sample_data(ps_18f)$tissue)
+# sample_data(ps_18f)$plot <- factor(sample_data(ps_18f)$plot)
+# sample_data(ps_18f)$plant <- factor(sample_data(ps_18f)$plant)
+# 
+# # add refseq object, and rename ASVs
+# ## NOTE - the ASV numbers will be discordant between the filtered and unfiltered, because the ASV names were not assigned first before the filtering.
+# dna_17b <- Biostrings::DNAStringSet(taxa_names(ps_17b))
+# names(dna_17b) <- taxa_names(ps_17b)
+# ps_17b <- merge_phyloseq(ps_17b, dna_17b)
+# taxa_names(ps_17b) <- paste0("ASV", seq(ntaxa(ps_17b)))
+# 
+# dna_17f <- Biostrings::DNAStringSet(taxa_names(ps_17f))
+# names(dna_17f) <- taxa_names(ps_17f)
+# ps_17f <- merge_phyloseq(ps_17f, dna_17f)
+# taxa_names(ps_17f) <- paste0("ASV", seq(ntaxa(ps_17f)))
+# 
+# dna_18b <- Biostrings::DNAStringSet(taxa_names(ps_18b))
+# names(dna_18b) <- taxa_names(ps_18b)
+# ps_18b <- merge_phyloseq(ps_18b, dna_18b)
+# taxa_names(ps_18b) <- paste0("ASV", seq(ntaxa(ps_18b)))
+# 
+# dna_18f <- Biostrings::DNAStringSet(taxa_names(ps_18f))
+# names(dna_18f) <- taxa_names(ps_18f)
+# ps_18f <- merge_phyloseq(ps_18f, dna_18f)
+# taxa_names(ps_18f) <- paste0("ASV", seq(ntaxa(ps_18f)))
+# 
+# # convert collect-ion dates to underscores, otherwise DESeq2 gives "warnings"
+# sample_data(ps_17b)$collect <- factor(sapply(sample_data(ps_17b)$collect, gsub, patt="-", replace="_"))
+# sample_data(ps_17f)$collect <- factor(sapply(sample_data(ps_17f)$collect, gsub, patt="-", replace="_"))
+# sample_data(ps_18b)$collect <- factor(sapply(sample_data(ps_18b)$collect, gsub, patt="-", replace="_"))
+# sample_data(ps_18f)$collect <- factor(sapply(sample_data(ps_18f)$collect, gsub, patt="-", replace="_"))
+# 
+# # for filtered datasets
+# save(ps_17b, file = "./data/FACE_phyloseq_bacteria.Y17-edit.RData")
+# save(ps_17f, file = "./data/FACE_phyloseq_fungi.Y17-edit.RData")
+# save(ps_18b, file = "./data/FACE_phyloseq_bacteria.Y18-edit.RData")
+# save(ps_18f, file = "./data/FACE_phyloseq_fungi.Y18-edit.RData")
+
+# # for unfiltered datasets
+# save(ps_17b, file = "./data/FACE_unfiltered_b17.ps-edit.RData")
+# save(ps_17f, file = "./data/FACE_unfiltered_f17.ps-edit.RData")
+# save(ps_18b, file = "./data/FACE_unfiltered_b18.ps-edit.RData")
+# save(ps_18f, file = "./data/FACE_unfiltered_f18.ps-edit.RData")
+
+
+# load in (unfiltered) ps objects
+load("./data/FACE_unfiltered_b17.ps-edit.RData")
+ps_17b -> ps_u_17b
+load("./data/FACE_unfiltered_f17.ps-edit.RData")
+ps_17f -> ps_u_17f
+load("./data/FACE_unfiltered_b18.ps-edit.RData")
+ps_18b -> ps_u_18b
+load("./data/FACE_unfiltered_f18.ps-edit.RData")
+ps_18f -> ps_u_18f
+
+ps_u_17b #133 samp, 552tax
+ps_u_17f # 100 samp, 165tax
+ps_u_18b #123 samp, 654tax
+ps_u_18f #128 samp, 1375tax
+
+# # load in renamed (filtered) ps objects
+load("./data/FACE_phyloseq_bacteria.Y17-edit.RData")
+load("./data/FACE_phyloseq_fungi.Y17-edit.RData")
+load("./data/FACE_phyloseq_bacteria.Y18-edit.RData")
+load("./data/FACE_phyloseq_fungi.Y18-edit.RData")
+
+ps_17b #133 samp, 73tax
+ps_17f #100 samp, 16tax
+ps_18b # 123 samp, 135tax
+ps_18f #128 samp, 180tax
+
+```
+
+### 1a) Experimental Design
+```{r, echo = FALSE, results = 'hide', fig.keep='none'}
+hist(rowSums(ps_17b@otu_table)) #ok
+hist(rowSums(ps_17f@otu_table)) #skewed
+hist(rowSums(ps_18b@otu_table)) #ok-ish
+hist(rowSums(ps_18f@otu_table)) #ok
+
+hist(log(colSums(ps_17b@otu_table))) #ok
+hist(log(colSums(ps_17f@otu_table))) #ok
+hist(log(colSums(ps_18b@otu_table))) #ok
+hist(log(colSums(ps_18f@otu_table))) #ok
+
+
+table(ps_18b@sam_data$tissue, ps_18b@sam_data$plot)
+
+
+table(ps_18b@sam_data$plot, ps_18b@sam_data$CO2) #plot nested in CO2 treatment
+table(ps_18b@sam_data$plot, ps_18b@sam_data$tissue)
+table(ps_18b@sam_data$plot, ps_18b@sam_data$collect)
+
+table(ps_18b@sam_data$plot, ps_18b@sam_data$plant)
+table(ps_18b@sam_data$tissue, ps_18b@sam_data$plant) #different nesting between years
+table(ps_18b@sam_data$collect, ps_18b@sam_data$plant) 
+
+table(ps_18b@sam_data$collect, ps_18b@sam_data$plant,  ps_18b@sam_data$tissue)
+
+```
+
+### 1b) Add nested plot_n, combo vars, & diversity measures
+```{r, results = 'hide'}
+
+# write out SbyE as dataframes from ps objects
+SbyE_17b <- data.frame(sample_data(ps_17b))
+SbyE_17f <- data.frame(sample_data(ps_17f))
+SbyE_18b <- data.frame(sample_data(ps_18b))
+SbyE_18f <- data.frame(sample_data(ps_18f))
+
+# manually add an "implicitly nested" column for plot (required for DESeq) = plot_n (only need to do once)
+
+#write.csv(SbyE_17b, "./intermediate/FACE_SbyE_17b.csv")
+SbyE_17b <- read.csv("./data/FACE_SbyE_17b_edit.csv", row.names=1, stringsAsFactors = TRUE)
+SbyE_17b$plot_n <- factor(SbyE_17b$plot_n)
+sample_data(ps_17b) <- SbyE_17b
+sample_data(ps_u_17b) <- SbyE_17b
+
+#write.csv(SbyE_17f, "./intermediate/FACE_SbyE_17f.csv")
+SbyE_17f <- read.csv("./data/FACE_SbyE_17f_edit.csv", row.names=1, stringsAsFactors = TRUE)
+SbyE_17f$plot_n <- factor(SbyE_17f$plot_n)
+sample_data(ps_17f) <- SbyE_17f
+sample_data(ps_u_17f) <- SbyE_17f
+
+#write.csv(SbyE_18b, "./intermediate/FACE_SbyE_18b.csv")
+SbyE_18b <- read.csv("./data/FACE_SbyE_18b_edit.csv", row.names=1, stringsAsFactors = TRUE)
+SbyE_18b$plot_n <- factor(SbyE_18b$plot_n)
+sample_data(ps_18b) <- SbyE_18b
+sample_data(ps_u_18b) <- SbyE_18b
+
+#write.csv(SbyE_18f, "./intermediate/FACE_SbyE_18f.csv")
+SbyE_18f <- read.csv("./data/FACE_SbyE_18f_edit.csv", row.names=1, stringsAsFactors = TRUE)
+SbyE_18f$plot_n <- factor(SbyE_18f$plot_n)
+sample_data(ps_18f) <- SbyE_18f
+sample_data(ps_u_18f) <- SbyE_18f
+
+#identical(sort(sample_data(ps_18f)$Label.Bakker),sort(sample_data(ps_u_18f)$Label.Bakker))
+```
+
+```{r, results = 'hide'}
+# add combo variables
+SbyE_17b$CxT <- as.factor(paste(SbyE_17b$tissue, SbyE_17b$collect, sep = "-"))
+SbyE_17f$CxT <- as.factor(paste(SbyE_17f$tissue, SbyE_17f$collect, sep = "-"))
+SbyE_18b$CxT <- as.factor(paste(SbyE_18b$tissue, SbyE_18b$collect, sep = "-"))
+SbyE_18f$CxT <- as.factor(paste(SbyE_18f$tissue, SbyE_18f$collect, sep = "-"))
+
+SbyE_17b$DxC <- as.factor(paste(SbyE_17b$CO2, SbyE_17b$collect, sep = "-"))
+SbyE_17f$DxC <- as.factor(paste(SbyE_17f$CO2, SbyE_17f$collect, sep = "-"))
+SbyE_18b$DxC <- as.factor(paste(SbyE_18b$CO2, SbyE_18b$collect, sep = "-"))
+SbyE_18f$DxC <- as.factor(paste(SbyE_18f$CO2, SbyE_18f$collect, sep = "-"))
+
+SbyE_17b$DxT <- as.factor(paste(SbyE_17b$CO2, SbyE_17b$tissue, sep = "-"))
+SbyE_17f$DxT <- as.factor(paste(SbyE_17f$CO2, SbyE_17f$tissue, sep = "-"))
+SbyE_18b$DxT <- as.factor(paste(SbyE_18b$CO2, SbyE_18b$tissue, sep = "-"))
+SbyE_18f$DxT <- as.factor(paste(SbyE_18f$CO2, SbyE_18f$tissue, sep = "-"))
+
+# add richness info
+alpha_17b <- as.data.frame(estimate_richness(ps_u_17b, 
+                        measures = c("Observed", "Shannon")))
+SbyE_17b <- data.frame(SbyE_17b, alpha_17b)
+alpha_17f <- as.data.frame(estimate_richness(ps_u_17f, 
+                        measures = c("Observed", "Shannon")))
+SbyE_17f <- data.frame(SbyE_17f, alpha_17f)
+alpha_18b <- as.data.frame(estimate_richness(ps_u_18b, 
+                        measures = c("Observed", "Shannon")))
+SbyE_18b <- data.frame(SbyE_18b, alpha_18b)
+alpha_18f <- as.data.frame(estimate_richness(ps_u_18f, 
+                        measures = c("Observed", "Shannon")))
+SbyE_18f <- data.frame(SbyE_18f, alpha_18f)
+
+```
+
+
+### 1c) Make VSTs & Distance Matrix
+* followed same basic workflow to create deseq2 obj, & subsequent VST and distance matrices as used for DeSEQ2 analysis proper
+* Specifically, used unfiltered phyloseq object as import to deseq. BUT did not used a model matrix to estimateSizeFactors (which is required in DeSEQ2).
+* Then did manual filtering (>5 reads in 10 samples), to get same size species matrices as before.
+* then did estimateDispersions using local fitType (as in the DeSEQ2 analysis)
+* got VST and then Euclidean of VST for distance matrix.
+
+```{r, results = 'hide', fig.keep = 'none'}
+# # 17b
+# dds_17b <- phyloseq_to_deseq2(ps_u_17b, ~ 1)
+# gm_17b <- apply(counts(dds_17b), 1, gm_mean_protected)
+# dds_17b <- estimateSizeFactors(dds_17b, type = 'ratio', geoMeans = gm_17b)
+#     # filter out taxa using same pipeline as before
+# nc <- counts(dds_17b, normalized = FALSE)
+# filter <- rowSums(nc >= 5) >= 10
+# table(filter)
+# dds_17b <- dds_17b[filter,]
+# # estimate dispersions
+# dds_17b <- estimateDispersions(dds_17b, fitType = 'local')
+# #plotDispEsts(dds_17b)
+# # get vst
+# vst_17b <- getVarianceStabilizedData(dds_17b)
+# vst_17b <- t(vst_17b)
+# save(dds_17b, file = "./data/FACE_dds_ps_17b.RData")
+# write.csv(vst_17b, "./data/FACE_vst_ps_17b.csv")
+# 
+# # 17f
+# dds_17f <- phyloseq_to_deseq2(ps_u_17f, ~ 1)
+# gm_17f <- apply(counts(dds_17f), 1, gm_mean_protected)
+# dds_17f <- estimateSizeFactors(dds_17f, type = 'ratio', geoMeans = gm_17f)
+#     # filter out taxa using same pipeline as before
+# nc <- counts(dds_17f, normalized = FALSE)
+# filter <- rowSums(nc >= 5) >= 10
+# table(filter)
+# dds_17f <- dds_17f[filter,]
+# # estimate dispersions
+# dds_17f <- estimateDispersions(dds_17f, fitType = 'local')
+# #plotDispEsts(dds_17f)
+# # get vst
+# vst_17f <- getVarianceStabilizedData(dds_17f)
+# vst_17f <- t(vst_17f)
+# save(dds_17f, file = "./data/FACE_dds_ps_17f.RData")
+# write.csv(vst_17f, "./data/FACE_vst_ps_17f.csv")
+# 
+# # 18b
+# dds_18b <- phyloseq_to_deseq2(ps_u_18b, ~ 1)
+# gm_18b <- apply(counts(dds_18b), 1, gm_mean_protected)
+# dds_18b <- estimateSizeFactors(dds_18b, type = 'ratio', geoMeans = gm_18b)
+#     # filter out taxa using same pipeline as before
+# nc <- counts(dds_18b, normalized = FALSE)
+# filter <- rowSums(nc >= 5) >= 10
+# table(filter)
+# dds_18b <- dds_18b[filter,]
+# # estimate dispersions
+# dds_18b <- estimateDispersions(dds_18b, fitType = 'local')
+# #plotDispEsts(dds_18b)
+# # get vst
+# vst_18b <- getVarianceStabilizedData(dds_18b)
+# vst_18b <- t(vst_18b)
+# save(dds_18b, file = "./data/FACE_dds_ps_18b.RData")
+# write.csv(vst_18b, "./data/FACE_vst_ps_18b.csv")
+# 
+# # 18f
+# dds_18f <- phyloseq_to_deseq2(ps_u_18f, ~ 1)
+# gm_18f <- apply(counts(dds_18f), 1, gm_mean_protected)
+# dds_18f <- estimateSizeFactors(dds_18f, type = 'ratio', geoMeans = gm_18f)
+#     # filter out taxa using same pipeline as before
+# nc <- counts(dds_18f, normalized = FALSE)
+# filter <- rowSums(nc >= 5) >= 10
+# table(filter)
+# dds_18f <- dds_18f[filter,]
+# # estimate dispersions
+# dds_18f <- estimateDispersions(dds_18f, fitType = 'local')
+# #plotDispEsts(dds_18f)
+# # get vst
+# vst_18f <- getVarianceStabilizedData(dds_18f)
+# vst_18f <- t(vst_18f)
+# save(dds_18f, file = "./data/FACE_dds_ps_18f.RData")
+# write.csv(vst_18f, "./data/FACE_vst_ps_18f.csv")
+
+
+
+# read DESeq data back in
+# #NOTE - except for 17f, all the Deseq size-dispersion estimates look good.
+load("./data/FACE_dds_ps_17b.RData"); dds_17b -> dds_noMM_17b
+load("./data/FACE_dds_ps_17f.RData"); dds_17f -> dds_noMM_17f
+load("./data/FACE_dds_ps_18b.RData"); dds_18b -> dds_noMM_18b
+load("./data/FACE_dds_ps_18f.RData"); dds_18f -> dds_noMM_18f
+
+plotDispEsts(dds_noMM_17b)
+title("2017 Bacteria")
+plotDispEsts(dds_noMM_17f)
+title("2017 Fungi")
+plotDispEsts(dds_noMM_18b)
+title("2018 Bacteria")
+plotDispEsts(dds_noMM_18f)
+title("2018 Fungi")
+
+# read back in VST-transformed OTU matrices
+vst_17b <- read.csv("./data/FACE_vst_ps_17b.csv", row.names = 1)
+vst_17f <- read.csv("./data/FACE_vst_ps_17f.csv", row.names = 1)
+vst_18b <- read.csv("./data/FACE_vst_ps_18b.csv", row.names = 1)
+vst_18f <- read.csv("./data/FACE_vst_ps_18f.csv", row.names = 1)
+
+## Euclidean distance of VST
+dist_17b <- stats::dist(vst_17b, method="euclidean")
+dist_17f <- stats::dist(vst_17f, method="euclidean")
+dist_18b <- stats::dist(vst_18b, method="euclidean")
+dist_18f <- stats::dist(vst_18f, method="euclidean")
+
+
+```
+
+# 2) Taxonomic Observations
+* On unfiltered datasets
+
+### 17b
+```{r}
+# total read counts
+sum(colSums(ps_u_17b@otu_table)) -> tot_17b; tot_17b
+# total ASVs
+length((colnames(ps_u_17b@otu_table)))
+# top 10 ASVs
+sort(colSums(otu_table(ps_u_17b)), decreasing = TRUE)[1:10] -> top10_17b
+# top 10 ASVs, read proportions
+top10_17b/tot_17b; sum(top10_17b/tot_17b)
+# IDs of top 10 ASVs 
+tax_table(ps_u_17b)[names(top10_17b)[1],]
+## Taxonomy
+sort(table(ps_u_17b@tax_table@.Data[,"Phylum"]), dec = TRUE)
+
+
+
+# leaf and spike ASVs in common? [[using filtered dataset to better compare to Structure results ]]
+table(colSums(subset_samples(ps_17b, tissue == "leaf")@otu_table) >0) #426u #70
+table(colSums(subset_samples(ps_17b, tissue == "spike")@otu_table) >0) #256u #67
+
+lf <- subset_samples(ps_17b, tissue == "leaf")
+lfASVs <- colnames(lf@otu_table[,colSums(lf@otu_table) > 0])
+
+sp <- subset_samples(ps_17b, tissue == "spike")
+spASVs <- colnames(sp@otu_table[,colSums(sp@otu_table) > 0])
+
+mySet <- list(leaf = lfASVs, spike = spASVs) 
+require("ggVennDiagram")
+vd1 <- ggVennDiagram(mySet, label = "count", col = "gray") +
+    scale_fill_gradient(low="#c6daeb",high = "#2e5c85") +
+    guides(fill = 'none') +
+    scale_color_manual(values = c(rep("black",4)))
+vd1
+#130/552u #64/73 ASVs in common
+
+```
+
+### 17f
+```{r}
+# total read counts
+sum(colSums(ps_u_17f@otu_table)) -> tot_17f; tot_17f
+# total ASVs
+length((colnames(ps_u_17f@otu_table)))
+# top 10 ASVs
+sort(colSums(otu_table(ps_u_17f)), decreasing = TRUE)[1:10] -> top10_17f
+# top 10 ASVs, read proportions
+top10_17f/tot_17f; sum(top10_17f/tot_17f)
+# IDs of top 10 ASVs 
+tax_table(ps_u_17f)[names(top10_17f)[1],]
+## Taxonomy
+sort(table(ps_u_17f@tax_table@.Data[,"Phylum"]), dec = TRUE)
+
+
+
+# leaf and spike ASVs in common?
+table(colSums(subset_samples(ps_17f, tissue == "leaf")@otu_table) >0) #136u #16
+table(colSums(subset_samples(ps_17f, tissue == "spike")@otu_table) >0) #76u !14
+
+lf <- subset_samples(ps_17f, tissue == "leaf")
+lfASVs <- colnames(lf@otu_table[,colSums(lf@otu_table) > 0])
+
+sp <- subset_samples(ps_17f, tissue == "spike")
+spASVs <- colnames(sp@otu_table[,colSums(sp@otu_table) > 0])
+
+mySet <- list(leaf = lfASVs, spike = spASVs) 
+vd1 <- ggVennDiagram(mySet, label = "count", col = "gray") +
+    scale_fill_gradient(low="#c6daeb",high = "#2e5c85") +
+    guides(fill = 'none') +
+    scale_color_manual(values = c(rep("black",4)))
+vd1
+#47/165u #14/16 ASVs in common
+
+```
+
+### 18b
+```{r}
+# total read counts
+sum(colSums(ps_u_18b@otu_table)) -> tot_18b; tot_18b
+# total ASVs
+length((colnames(ps_u_18b@otu_table)))
+# top 10 ASVs
+sort(colSums(otu_table(ps_u_18b)), decreasing = TRUE)[1:10] -> top10_18b
+# top 10 ASVs, read proportions
+top10_18b/tot_18b; sum(top10_18b/tot_18b)
+# IDs of top 10 ASVs 
+tax_table(ps_u_18b)[names(top10_18b)[1],]
+## Taxonomy
+sort(table(ps_u_18b@tax_table@.Data[,"Phylum"]), dec = TRUE)
+
+
+
+# leaf and spike ASVs in common?
+table(colSums(subset_samples(ps_18b, tissue == "leaf")@otu_table) >0) #544u #129
+table(colSums(subset_samples(ps_18b, tissue == "spike")@otu_table) >0) #293u #115
+
+lf <- subset_samples(ps_18b, tissue == "leaf")
+lfASVs <- colnames(lf@otu_table[,colSums(lf@otu_table) > 0])
+
+sp <- subset_samples(ps_18b, tissue == "spike")
+spASVs <- colnames(sp@otu_table[,colSums(sp@otu_table) > 0])
+
+mySet <- list(leaf = lfASVs, spike = spASVs) 
+vd1 <- ggVennDiagram(mySet, label = "count", col = "gray") +
+    scale_fill_gradient(low="#c6daeb",high = "#2e5c85") +
+    guides(fill = 'none') +
+    scale_color_manual(values = c(rep("black",4)))
+vd1
+#183/654u #109/135 ASVs in common
+```
+
+### 18f
+```{r}
+# total read counts
+sum(colSums(ps_u_18f@otu_table)) -> tot_18f; tot_18f
+# total ASVs
+length((colnames(ps_u_18f@otu_table)))
+# top 10 ASVs
+sort(colSums(otu_table(ps_u_18f)), decreasing = TRUE)[1:10] -> top10_18f
+# top 10 ASVs, read proportions
+top10_18f/tot_18f; sum(top10_18f/tot_18f)
+# IDs of top 10 ASVs 
+tax_table(ps_u_18f)[names(top10_18f)[1],]
+## Taxonomy
+sort(table(ps_u_18f@tax_table@.Data[,"Phylum"]), dec = TRUE)
+
+
+
+# leaf and spike ASVs in common?
+table(colSums(subset_samples(ps_18f, tissue == "leaf")@otu_table) >0) #967u #180
+table(colSums(subset_samples(ps_18f, tissue == "spike")@otu_table) >0) #752u #171
+
+lf <- subset_samples(ps_18f, tissue == "leaf")
+lfASVs <- colnames(lf@otu_table[,colSums(lf@otu_table) > 0])
+
+sp <- subset_samples(ps_18f, tissue == "spike")
+spASVs <- colnames(sp@otu_table[,colSums(sp@otu_table) > 0])
+
+mySet <- list(leaf = lfASVs, spike = spASVs) 
+vd1 <- ggVennDiagram(mySet, label = "count", col = "gray") +
+    scale_fill_gradient(low="#c6daeb",high = "#2e5c85") +
+    guides(fill = 'none') +
+    scale_color_manual(values = c(rep("black",4)))
+vd1
+#344/1375u #171/180 ASVs in common
+
+```
+
+
+
+# 3) Beta-Diversity
+* F-Ratio denominators determined using Underwood 1997.
+* Also used to determine the correct X-matrix to use in the DESeq2 analyses.
+
+### 3a) Comm Structure
+```{r}
+#ANOVA models of comm structure
+# rrpp_17b <- lm.rrpp(dist_17b ~ CO2 + collect + tissue + CO2:plot_n +
+#                     CO2:collect + CO2:tissue + collect:tissue +
+#                     CO2:collect:tissue + CO2:collect:plot_n + CO2:tissue:plot_n +
+#                     CO2:collect:tissue:plot_n,
+#                     iter = 999,
+#                     print.progress = TRUE, data = SbyE_17b, SS.type = "III")
+# save(rrpp_17b, file="./intermediate/FACE_RRPP_17b.RData")
+load("./intermediate/FACE_RRPP_17b.RData")
+#anova(rrpp_17b, effect.type = "F") # to get order of nested variable names
+anova_17b <- anova(rrpp_17b, effect.type = "F", 
+                   error = c("CO2:plot_n", "CO2:collect:plot_n", 
+              "CO2:tissue:plot_n", "Residuals", "CO2:collect:plot_n", "CO2:tissue:plot_n", 
+              "CO2:collect:tissue:plot_n", "CO2:collect:tissue:plot_n",
+              "Residuals", "Residuals","Residuals"))
+summary(anova_17b, formula = false)
+# capture.output(summary(anova_17b, formula = false),
+#    file = file.path("./tables/FACE_RRPP_17b.txt"))
+
+# rrpp_17f <- lm.rrpp(dist_17f ~ CO2 + collect + tissue + CO2:plot_n +
+#                     CO2:collect + CO2:tissue + collect:tissue +
+#                     CO2:collect:tissue + CO2:collect:plot_n + CO2:tissue:plot_n +
+#                     CO2:collect:tissue:plot_n,
+#                     iter = 999,
+#                     print.progress = TRUE, data = SbyE_17f, SS.type = "III")
+# save(rrpp_17f, file="./intermediate/FACE_RRPP_17f.RData")
+load("./intermediate/FACE_RRPP_17f.RData")
+#anova(rrpp_17f, effect.type = "F") # to get order of nested variable names
+anova_17f <- anova(rrpp_17f, effect.type = "F", 
+                   error = c("CO2:plot_n", "CO2:collect:plot_n", 
+              "CO2:tissue:plot_n", "Residuals", "CO2:collect:plot_n", "CO2:tissue:plot_n", 
+              "CO2:collect:tissue:plot_n", "CO2:collect:tissue:plot_n",
+              "Residuals", "Residuals","Residuals"))
+summary(anova_17f, formula = false)
+# capture.output(summary(anova_17f, formula = false),
+#    file = file.path("./tables/FACE_RRPP_17f.txt"))
+
+# rrpp_18b <- lm.rrpp(dist_18b ~ CO2 + collect + tissue + CO2:plot_n +
+#                     CO2:collect + CO2:tissue + collect:tissue +
+#                     CO2:collect:tissue + CO2:collect:plot_n + CO2:tissue:plot_n +
+#                     CO2:collect:tissue:plot_n,
+#                     iter = 999,
+#                     print.progress = TRUE, data = SbyE_18b, SS.type = "III")
+# save(rrpp_18b, file="./intermediate/FACE_RRPP_18b.RData")
+load("./intermediate/FACE_RRPP_18b.RData")
+#anova(rrpp_18b, effect.type = "F") # to get order of nested variable names
+anova_18b <- anova(rrpp_18b, effect.type = "F", 
+                   error = c("CO2:plot_n", "CO2:collect:plot_n", 
+              "CO2:tissue:plot_n", "Residuals", "CO2:collect:plot_n", "CO2:tissue:plot_n", 
+              "CO2:collect:tissue:plot_n", "CO2:collect:tissue:plot_n",
+              "Residuals", "Residuals","Residuals"))
+summary(anova_18b, formula = false)
+# capture.output(summary(anova_18b, formula = false),
+#    file = file.path("./tables/FACE_RRPP_18b.txt"))
+
+# rrpp_18f <- lm.rrpp(dist_18f ~ CO2 + collect + tissue + CO2:plot_n +
+#                     CO2:collect + CO2:tissue + collect:tissue +
+#                     CO2:collect:tissue + CO2:collect:plot_n + CO2:tissue:plot_n +
+#                     CO2:collect:tissue:plot_n,
+#                     iter = 999,
+#                     print.progress = TRUE, data = SbyE_18f, SS.type = "III")
+# save(rrpp_18f, file="./intermediate/FACE_RRPP_18f.RData")
+load("./intermediate/FACE_RRPP_18f.RData")
+#anova(rrpp_18f, effect.type = "F") # to get order of nested variable names
+anova_18f <- anova(rrpp_18f, effect.type = "F", 
+                   error = c("CO2:plot_n", "CO2:collect:plot_n", 
+              "CO2:tissue:plot_n", "Residuals", "CO2:collect:plot_n", "CO2:tissue:plot_n", 
+              "CO2:collect:tissue:plot_n", "CO2:collect:tissue:plot_n",
+              "Residuals", "Residuals","Residuals"))
+summary(anova_18f, formula = false)
+# capture.output(summary(anova_18f, formula = false),
+#    file = file.path("./tables/FACE_RRPP_18f.txt"))
+
+# dim(rrpp_17b$LM$X) #36 full rank
+# dim(rrpp_17f$LM$X) #34 not full rank, due to sample loss (d.f. lost in 4-way interaction)
+# dim(rrpp_18b$LM$X) #62 not full rank, due to sample loss (d.f. lost in 4-way interaction)
+# dim(rrpp_18f$LM$X) #64 full rank
+
+```
+
+### 3b) PCoA Set up
+```{r, include = FALSE}
+## create pcoa
+
+# 17b
+pcoa_17b <- cmdscale(dist_17b, eig =TRUE)
+var1_17b <- round(pcoa_17b$eig[1] / sum(pcoa_17b$eig), 3) * 100
+var2_17b <- round(pcoa_17b$eig[2] / sum(pcoa_17b$eig), 3) * 100
+vars_17b <- c(var1_17b, var2_17b)
+vars_17b #22.2  7.6
+# create dataframes for use in plots
+scores_17b <- as.data.frame(pcoa_17b$points)
+scores_17b$ids <- rownames(scores_17b)
+pcdat_17b <- merge(scores_17b, SbyE_17b, by.x="ids",
+                by.y="Label.SRA")
+# Broken Stick data frames
+pcoaeig_17b <- data.frame("x" = seq(1, length(pcoa_17b$eig)[1]),
+                      "eig" = pcoa_17b$eig,
+                      "b.stick" = bstick(length(pcoa_17b$eig), tot.var=sum(pcoa_17b$eig))  )
+
+# 17f
+pcoa_17f <- cmdscale(dist_17f, eig =TRUE)
+var1_17f <- round(pcoa_17f$eig[1] / sum(pcoa_17f$eig), 3) * 100
+var2_17f <- round(pcoa_17f$eig[2] / sum(pcoa_17f$eig), 3) * 100
+vars_17f <- c(var1_17f, var2_17f)
+vars_17f #17.6 12.0
+# create dataframes for use in plots
+scores_17f <- as.data.frame(pcoa_17f$points)
+scores_17f$ids <- rownames(scores_17f)
+pcdat_17f <- merge(scores_17f, SbyE_17f, by.x="ids",
+                by.y="Label.SRA")
+# Broken Stick data frames
+pcoaeig_17f <- data.frame("x" = seq(1, length(pcoa_17f$eig)[1]),
+                      "eig" = pcoa_17f$eig,
+                      "b.stick" = bstick(length(pcoa_17f$eig), tot.var=sum(pcoa_17f$eig))  )
+
+# 18b
+pcoa_18b <- cmdscale(dist_18b, eig =TRUE)
+var1_18b <- round(pcoa_18b$eig[1] / sum(pcoa_18b$eig), 3) * 100
+var2_18b <- round(pcoa_18b$eig[2] / sum(pcoa_18b$eig), 3) * 100
+vars_18b <- c(var1_18b, var2_18b)
+vars_18b #35.1  9.2
+# create dataframes for use in plots
+scores_18b <- as.data.frame(pcoa_18b$points)
+scores_18b$ids <- rownames(scores_18b)
+pcdat_18b <- merge(scores_18b, SbyE_18b, by.x="ids",
+                by.y="Label.SRA")
+# Broken Stick data frames
+pcoaeig_18b <- data.frame("x" = seq(1, length(pcoa_18b$eig)[1]),
+                      "eig" = pcoa_18b$eig,
+                      "b.stick" = bstick(length(pcoa_18b$eig), tot.var=sum(pcoa_18b$eig))  )
+
+# 18f
+pcoa_18f <- cmdscale(dist_18f, eig =TRUE)
+var1_18f <- round(pcoa_18f$eig[1] / sum(pcoa_18f$eig), 3) * 100
+var2_18f <- round(pcoa_18f$eig[2] / sum(pcoa_18f$eig), 3) * 100
+vars_18f <- c(var1_18f, var2_18f)
+vars_18f #19.4  9.3
+# create dataframes for use in plots
+scores_18f <- as.data.frame(pcoa_18f$points)
+scores_18f$ids <- rownames(scores_18f)
+pcdat_18f <- merge(scores_18f, SbyE_18f, by.x="ids",
+                by.y="Label.SRA")
+# Broken Stick data frames
+pcoaeig_18f <- data.frame("x" = seq(1, length(pcoa_18f$eig)[1]),
+                      "eig" = pcoa_18f$eig,
+                      "b.stick" = bstick(length(pcoa_18f$eig), tot.var=sum(pcoa_18f$eig))  )
+```
+
+* Broken Stick plots
+```{r, include = FALSE}
+
+ggplot() + #15 signif axes
+      geom_point(data = pcoaeig_17b[1:20,], aes(x = x, y = eig)) +
+      scale_x_continuous('PCoA Axis') +
+      scale_y_continuous('Eigenvalue') +
+      #Kaiser-Guttman criterion
+      geom_hline(yintercept = mean(pcoaeig_17b$eig), col = 'blue', lty = 2) +
+      #Broken-Stick criterion
+      stat_smooth(data = pcoaeig_17b[1:20,], aes(x = x, y = b.stick),
+                  method = "loess", col = 'red', lty = 4) 
+ggplot() +  #15 signif axes
+      geom_point(data = pcoaeig_17f[1:20,], aes(x = x, y = eig)) +
+      scale_x_continuous('PCoA Axis') +
+      scale_y_continuous('Eigenvalue') +
+      #Kaiser-Guttman criterion
+      geom_hline(yintercept = mean(pcoaeig_17f$eig), col = 'blue', lty = 2) +
+      #Broken-Stick criterion
+      stat_smooth(data = pcoaeig_17f[1:20,], aes(x = x, y = b.stick),
+                  method = "loess", col = 'red', lty = 4) 
+ggplot() +   #first 6 axes signif
+      geom_point(data = pcoaeig_18b[1:20,], aes(x = x, y = eig)) +
+      scale_x_continuous('PCoA Axis') +
+      scale_y_continuous('Eigenvalue') +
+      #Kaiser-Guttman criterion
+      geom_hline(yintercept = mean(pcoaeig_18b$eig), col = 'blue', lty = 2) +
+      #Broken-Stick criterion
+      stat_smooth(data = pcoaeig_18b[1:20,], aes(x = x, y = b.stick),
+                  method = "loess", col = 'red', lty = 4) 
+ggplot() + #9 axes signif
+      geom_point(data = pcoaeig_18f[1:20,], aes(x = x, y = eig)) +
+      scale_x_continuous('PCoA Axis') +
+      scale_y_continuous('Eigenvalue') +
+      #Kaiser-Guttman criterion
+      geom_hline(yintercept = mean(pcoaeig_18f$eig), col = 'blue', lty = 2) +
+      #Broken-Stick criterion
+      stat_smooth(data = pcoaeig_18f[1:20,], aes(x = x, y = b.stick),
+                  method = "loess", col = 'red', lty = 4) 
+
+```
+
+### 3c) PCoA Main Effects
+#### CO2
+```{r, include = FALSE}
+#create ellipses dataframe
+ell_CO2_17b <- data.frame()
+for(g in levels(pcdat_17b$CO2)){
+  ell_CO2_17b <- rbind(ell_CO2_17b, cbind(as.data.frame(with(
+    pcdat_17b[pcdat_17b$CO2==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , CO2=g))   }
+#plot
+co2_17b <- ggplot() + coord_equal() +
+      geom_path(data = ell_CO2_17b, aes(x = V1, y = V2,
+            group = CO2, color = CO2),
+            linetype = 1, size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_17b, aes(x = V1, y = V2,
+            color = CO2   ) , size = 2) +
+      scale_color_manual("", values = co2_color) +
+      guides(color=guide_legend(ncol=2)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_17b[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_17b[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.6, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom")
+
+#create ellipses dataframe
+ell_CO2_17f <- data.frame()
+for(g in levels(pcdat_17f$CO2)){
+  ell_CO2_17f <- rbind(ell_CO2_17f, cbind(as.data.frame(with(
+    pcdat_17f[pcdat_17f$CO2==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , CO2=g))   }
+#plot
+co2_17f <- ggplot() + coord_equal() +
+      geom_path(data = ell_CO2_17f, aes(x = V1, y = V2,
+            group = CO2, color = CO2),
+            linetype = 1, size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_17f, aes(x = V1, y = V2,
+            color = CO2   ) , size = 2) +
+      scale_color_manual("", values = co2_color) +
+      guides(color=guide_legend(ncol=2)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_17f[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_17f[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.6, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom")
+
+#create ellipses dataframe
+ell_CO2_18b <- data.frame()
+for(g in levels(pcdat_18b$CO2)){
+  ell_CO2_18b <- rbind(ell_CO2_18b, cbind(as.data.frame(with(
+    pcdat_18b[pcdat_18b$CO2==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , CO2=g))   }
+#plot
+co2_18b <- ggplot() + coord_equal() +
+      geom_path(data = ell_CO2_18b, aes(x = V1, y = V2,
+            group = CO2, color = CO2),
+            linetype = 1, size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_18b, aes(x = V1, y = V2,
+            color = CO2   ) , size = 2) +
+      scale_color_manual("", values = co2_color) +
+      guides(color=guide_legend(ncol=2)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_18b[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_18b[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.6, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom")
+
+#create ellipses dataframe
+ell_CO2_18f <- data.frame()
+for(g in levels(pcdat_18f$CO2)){
+  ell_CO2_18f <- rbind(ell_CO2_18f, cbind(as.data.frame(with(
+    pcdat_18f[pcdat_18f$CO2==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , CO2=g))   }
+#plot
+co2_18f <- ggplot() + coord_equal() +
+      geom_path(data = ell_CO2_18f, aes(x = V1, y = V2,
+            group = CO2, color = CO2),
+            linetype = 1, size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_18f, aes(x = V1, y = V2,
+            color = CO2   ) , size = 2) +
+      scale_color_manual("", values = co2_color) +
+      guides(color=guide_legend(ncol=2)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_18f[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_18f[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.6, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom")
+```
+```{r, echo = FALSE}
+#tiff("./figures/CO2_PCoA.tiff", width=8, height=8, units="in", res=600)
+multiplot(co2_17b, co2_17f, co2_18b, co2_18f, cols = 2)
+#dev.off()
+```
+
+#### collect
+```{r, include = FALSE}
+#create ellipses dataframe
+ell_collect_17b <- data.frame()
+for(g in levels(pcdat_17b$collect)){
+  ell_collect_17b <- rbind(ell_collect_17b, cbind(as.data.frame(with(
+    pcdat_17b[pcdat_17b$collect==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , collect=g))   }
+#plot
+collect_17b <- ggplot() + coord_equal() +
+      geom_path(data = ell_collect_17b, aes(x = V1, y = V2,
+            group = collect, color = collect),
+            linetype = 1, size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_17b, aes(x = V1, y = V2,
+            color = collect   ) , size = 2) +
+      scale_color_manual("", values = collect_color) +
+      scale_x_continuous(paste("PCoA 1 (", vars_17b[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_17b[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.6, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom")
+
+#create ellipses dataframe
+ell_collect_17f <- data.frame()
+for(g in levels(pcdat_17f$collect)){
+  ell_collect_17f <- rbind(ell_collect_17f, cbind(as.data.frame(with(
+    pcdat_17f[pcdat_17f$collect==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , collect=g))   }
+#plot
+collect_17f <- ggplot() + coord_equal() +
+      geom_path(data = ell_collect_17f, aes(x = V1, y = V2,
+            group = collect, color = collect),
+            linetype = 1, size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_17f, aes(x = V1, y = V2,
+            color = collect   ) , size = 2) +
+      scale_color_manual("", values = collect_color) +
+      scale_x_continuous(paste("PCoA 1 (", vars_17f[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_17f[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.6, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom")
+
+#create ellipses dataframe
+ell_collect_18b <- data.frame()
+for(g in levels(pcdat_18b$collect)){
+  ell_collect_18b <- rbind(ell_collect_18b, cbind(as.data.frame(with(
+    pcdat_18b[pcdat_18b$collect==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , collect=g))   }
+#plot
+collect_18b <- ggplot() + coord_equal() +
+      geom_path(data = ell_collect_18b, aes(x = V1, y = V2,
+            group = collect, color = collect),
+            linetype = 1, size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_18b, aes(x = V1, y = V2,
+            color = collect   ) , size = 2) +
+      scale_color_manual("", values = collect_color) +
+      scale_x_continuous(paste("PCoA 1 (", vars_18b[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_18b[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.6, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom")
+
+#create ellipses dataframe
+ell_collect_18f <- data.frame()
+for(g in levels(pcdat_18f$collect)){
+  ell_collect_18f <- rbind(ell_collect_18f, cbind(as.data.frame(with(
+    pcdat_18f[pcdat_18f$collect==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , collect=g))   }
+#plot
+collect_18f <- ggplot() + coord_equal() +
+      geom_path(data = ell_collect_18f, aes(x = V1, y = V2,
+            group = collect, color = collect),
+            linetype = 1, size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_18f, aes(x = V1, y = V2,
+            color = collect   ) , size = 2) +
+      scale_color_manual("", values = collect_color) +
+      scale_x_continuous(paste("PCoA 1 (", vars_18f[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_18f[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.6, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom")
+```
+```{r, echo = FALSE}
+#tiff("./figures/Collect_PCoA.tiff", width=8, height=8, units="in", res=600)
+multiplot(collect_17b, collect_17f, collect_18b, collect_18f, cols = 2)
+#dev.off()
+```
+
+#### tissue
+```{r, include = FALSE}
+#create ellipses dataframe
+ell_tissue_17b <- data.frame()
+for(g in levels(pcdat_17b$tissue)){
+  ell_tissue_17b <- rbind(ell_tissue_17b, cbind(as.data.frame(with(
+    pcdat_17b[pcdat_17b$tissue==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , tissue=g))   }
+#plot
+tissue_17b <- ggplot() + coord_equal() +
+      geom_path(data = ell_tissue_17b, aes(x = V1, y = V2,
+            group = tissue, color = tissue),
+            linetype = 1, size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_17b, aes(x = V1, y = V2,
+            color = tissue   ) , size = 2) +
+      scale_color_manual("", values = tissue_color) +
+      scale_x_continuous(paste("PCoA 1 (", vars_17b[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_17b[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.6, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom")
+
+#create ellipses dataframe
+ell_tissue_17f <- data.frame()
+for(g in levels(pcdat_17f$tissue)){
+  ell_tissue_17f <- rbind(ell_tissue_17f, cbind(as.data.frame(with(
+    pcdat_17f[pcdat_17f$tissue==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , tissue=g))   }
+#plot
+tissue_17f <- ggplot() + coord_equal() +
+      geom_path(data = ell_tissue_17f, aes(x = V1, y = V2,
+            group = tissue, color = tissue),
+            linetype = 1, size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_17f, aes(x = V1, y = V2,
+            color = tissue   ) , size = 2) +
+      scale_color_manual("", values = tissue_color) +
+      scale_x_continuous(paste("PCoA 1 (", vars_17f[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_17f[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.6, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom")
+
+#create ellipses dataframe
+ell_tissue_18b <- data.frame()
+for(g in levels(pcdat_18b$tissue)){
+  ell_tissue_18b <- rbind(ell_tissue_18b, cbind(as.data.frame(with(
+    pcdat_18b[pcdat_18b$tissue==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , tissue=g))   }
+#plot
+tissue_18b <- ggplot() + coord_equal() +
+      geom_path(data = ell_tissue_18b, aes(x = V1, y = V2,
+            group = tissue, color = tissue),
+            linetype = 1, size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_18b, aes(x = V1, y = V2,
+            color = tissue   ) , size = 2) +
+      scale_color_manual("", values = tissue_color) +
+      scale_x_continuous(paste("PCoA 1 (", vars_18b[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_18b[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.6, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom")
+
+#create ellipses dataframe
+ell_tissue_18f <- data.frame()
+for(g in levels(pcdat_18f$tissue)){
+  ell_tissue_18f <- rbind(ell_tissue_18f, cbind(as.data.frame(with(
+    pcdat_18f[pcdat_18f$tissue==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , tissue=g))   }
+#plot
+tissue_18f <- ggplot() + coord_equal() +
+      geom_path(data = ell_tissue_18f, aes(x = V1, y = V2,
+            group = tissue, color = tissue),
+            linetype = 1, size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_18f, aes(x = V1, y = V2,
+            color = tissue   ) , size = 2) +
+      scale_color_manual("", values = tissue_color) +
+      scale_x_continuous(paste("PCoA 1 (", vars_18f[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_18f[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.6, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom")
+```
+```{r, echo = FALSE}
+#tiff("./figures/Tissue_PCoA.tiff", width=8, height=8, units="in", res=600)
+multiplot(tissue_17b, tissue_17f, tissue_18b, tissue_18f, cols = 2)
+#dev.off()
+```
+
+### 3d) PCoA 2-way
+#### collect x tissue
+```{r, include = FALSE}
+#create ellipses dataframe
+ell_CxT_17b <- data.frame()
+for(g in levels(pcdat_17b$CxT)){
+  ell_CxT_17b <- rbind(ell_CxT_17b, cbind(as.data.frame(with(
+    pcdat_17b[pcdat_17b$CxT==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , CxT=g))   }
+ell_CxT_17b$collect <- as.factor(unname(sapply(ell_CxT_17b$CxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_CxT_17b$tissue <- as.factor(unname(sapply(ell_CxT_17b$CxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plot
+CxT_17b <- ggplot() + coord_equal() +
+      geom_path(data = ell_CxT_17b, aes(x = V1, y = V2,
+            group = CxT, color = collect, linetype = tissue),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_17b, aes(x = V1, y = V2,
+            color = collect, shape = tissue ) , size = 2) +
+      scale_color_manual("", values = collect_color[1:3]) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,16)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_17b[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_17b[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+
+# 17f
+ell_CxT_17f <- data.frame()
+for(g in levels(pcdat_17f$CxT)){
+  ell_CxT_17f <- rbind(ell_CxT_17f, cbind(as.data.frame(with(
+    pcdat_17f[pcdat_17f$CxT==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , CxT=g))   }
+ell_CxT_17f$collect <- as.factor(unname(sapply(ell_CxT_17f$CxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_CxT_17f$tissue <- as.factor(unname(sapply(ell_CxT_17f$CxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plot
+CxT_17f <- ggplot() + coord_equal() +
+      geom_path(data = ell_CxT_17f, aes(x = V1, y = V2,
+            group = CxT, color = collect, linetype = tissue),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_17f, aes(x = V1, y = V2,
+            color = collect, shape = tissue ) , size = 2) +
+      scale_color_manual("", values = collect_color[1:3]) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,16)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_17f[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_17f[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+
+# 18b
+ell_CxT_18b <- data.frame()
+for(g in levels(pcdat_18b$CxT)){
+  ell_CxT_18b <- rbind(ell_CxT_18b, cbind(as.data.frame(with(
+    pcdat_18b[pcdat_18b$CxT==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , CxT=g))   }
+ell_CxT_18b$collect <- as.factor(unname(sapply(ell_CxT_18b$CxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_CxT_18b$tissue <- as.factor(unname(sapply(ell_CxT_18b$CxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plot
+CxT_18b <- ggplot() + coord_equal() +
+      geom_path(data = ell_CxT_18b, aes(x = V1, y = V2,
+            group = CxT, color = collect, linetype = tissue),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_18b, aes(x = V1, y = V2,
+            color = collect, shape = tissue ) , size = 2) +
+      scale_color_manual("", values = collect_color) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,16)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_18b[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_18b[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+
+# 18f
+ell_CxT_18f <- data.frame()
+for(g in levels(pcdat_18f$CxT)){
+  ell_CxT_18f <- rbind(ell_CxT_18f, cbind(as.data.frame(with(
+    pcdat_18f[pcdat_18f$CxT==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , CxT=g))   }
+ell_CxT_18f$collect <- as.factor(unname(sapply(ell_CxT_18f$CxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_CxT_18f$tissue <- as.factor(unname(sapply(ell_CxT_18f$CxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plot
+CxT_18f <- ggplot() + coord_equal() +
+      geom_path(data = ell_CxT_18f, aes(x = V1, y = V2,
+            group = CxT, color = collect, linetype = tissue),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_18f, aes(x = V1, y = V2,
+            color = collect, shape = tissue ) , size = 2) +
+      scale_color_manual("", values = collect_color) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,16)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_18f[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_18f[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+```
+```{r, echo = FALSE, fig.height = 6}
+#tiff("./figures/CxT_PCoA.tiff", width=8, height=8, units="in", res=600)
+multiplot(CxT_17b, CxT_17f, CxT_18b, CxT_18f, cols = 2)
+#dev.off()
+
+```
+
+#### CO2 x collect
+```{r, include = FALSE}
+#create ellipses dataframe
+ell_DxC_17b <- data.frame()
+for(g in levels(pcdat_17b$DxC)){
+  ell_DxC_17b <- rbind(ell_DxC_17b, cbind(as.data.frame(with(
+    pcdat_17b[pcdat_17b$DxC==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxC=g))   }
+ell_DxC_17b$collect <- as.factor(unname(sapply(ell_DxC_17b$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxC_17b$CO2 <- as.factor(unname(sapply(ell_DxC_17b$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plot
+DxC_17b <- ggplot() + coord_equal() +
+      geom_path(data = ell_DxC_17b, aes(x = V1, y = V2,
+            group = DxC, color = collect, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_17b, aes(x = V1, y = V2,
+            color = collect, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = collect_color[1:3]) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,16)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_17b[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_17b[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+
+# 17f
+ell_DxC_17f <- data.frame()
+for(g in levels(pcdat_17f$DxC)){
+  ell_DxC_17f <- rbind(ell_DxC_17f, cbind(as.data.frame(with(
+    pcdat_17f[pcdat_17f$DxC==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxC=g))   }
+ell_DxC_17f$collect <- as.factor(unname(sapply(ell_DxC_17f$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxC_17f$CO2 <- as.factor(unname(sapply(ell_DxC_17f$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plot
+DxC_17f <- ggplot() + coord_equal() +
+      geom_path(data = ell_DxC_17f, aes(x = V1, y = V2,
+            group = DxC, color = collect, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_17f, aes(x = V1, y = V2,
+            color = collect, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = collect_color[1:3]) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,16)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_17f[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_17f[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+
+# 18b
+ell_DxC_18b <- data.frame()
+for(g in levels(pcdat_18b$DxC)){
+  ell_DxC_18b <- rbind(ell_DxC_18b, cbind(as.data.frame(with(
+    pcdat_18b[pcdat_18b$DxC==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxC=g))   }
+ell_DxC_18b$collect <- as.factor(unname(sapply(ell_DxC_18b$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxC_18b$CO2 <- as.factor(unname(sapply(ell_DxC_18b$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plot
+DxC_18b <- ggplot() + coord_equal() +
+      geom_path(data = ell_DxC_18b, aes(x = V1, y = V2,
+            group = DxC, color = collect, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_18b, aes(x = V1, y = V2,
+            color = collect, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = collect_color) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,16)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_18b[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_18b[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+
+# 18f
+ell_DxC_18f <- data.frame()
+for(g in levels(pcdat_18f$DxC)){
+  ell_DxC_18f <- rbind(ell_DxC_18f, cbind(as.data.frame(with(
+    pcdat_18f[pcdat_18f$DxC==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxC=g))   }
+ell_DxC_18f$collect <- as.factor(unname(sapply(ell_DxC_18f$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxC_18f$CO2 <- as.factor(unname(sapply(ell_DxC_18f$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plot
+DxC_18f <- ggplot() + coord_equal() +
+      geom_path(data = ell_DxC_18f, aes(x = V1, y = V2,
+            group = DxC, color = collect, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_18f, aes(x = V1, y = V2,
+            color = collect, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = collect_color) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,16)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_18f[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_18f[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+```
+```{r, echo = FALSE, fig.height = 6}
+#tiff("./figures/DxC_PCoA.tiff", width=8, height=8, units="in", res=600)
+multiplot(DxC_17b, DxC_17f, DxC_18b, DxC_18f, cols = 2)
+#dev.off()
+
+```
+
+#### CO2 x tissue
+```{r, include = FALSE}
+#create ellipses dataframe
+ell_DxT_17b <- data.frame()
+for(g in levels(pcdat_17b$DxT)){
+  ell_DxT_17b <- rbind(ell_DxT_17b, cbind(as.data.frame(with(
+    pcdat_17b[pcdat_17b$DxT==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxT=g))   }
+ell_DxT_17b$tissue <- as.factor(unname(sapply(ell_DxT_17b$DxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxT_17b$CO2 <- as.factor(unname(sapply(ell_DxT_17b$DxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plot
+DxT_17b <- ggplot() + coord_equal() +
+      geom_path(data = ell_DxT_17b, aes(x = V1, y = V2,
+            group = DxT, color = tissue, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_17b, aes(x = V1, y = V2,
+            color = tissue, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = tissue_color[1:3]) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,7)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_17b[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_17b[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+#DxT_17b
+
+# 17f
+ell_DxT_17f <- data.frame()
+for(g in levels(pcdat_17f$DxT)){
+  ell_DxT_17f <- rbind(ell_DxT_17f, cbind(as.data.frame(with(
+    pcdat_17f[pcdat_17f$DxT==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxT=g))   }
+ell_DxT_17f$tissue <- as.factor(unname(sapply(ell_DxT_17f$DxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxT_17f$CO2 <- as.factor(unname(sapply(ell_DxT_17f$DxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plot
+DxT_17f <- ggplot() + coord_equal() +
+      geom_path(data = ell_DxT_17f, aes(x = V1, y = V2,
+            group = DxT, color = tissue, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_17f, aes(x = V1, y = V2,
+            color = tissue, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = tissue_color[1:3]) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,7)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_17f[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_17f[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+#DxT_17f
+
+# 18b
+ell_DxT_18b <- data.frame()
+for(g in levels(pcdat_18b$DxT)){
+  ell_DxT_18b <- rbind(ell_DxT_18b, cbind(as.data.frame(with(
+    pcdat_18b[pcdat_18b$DxT==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxT=g))   }
+ell_DxT_18b$tissue <- as.factor(unname(sapply(ell_DxT_18b$DxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxT_18b$CO2 <- as.factor(unname(sapply(ell_DxT_18b$DxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plot
+DxT_18b <- ggplot() + coord_equal() +
+      geom_path(data = ell_DxT_18b, aes(x = V1, y = V2,
+            group = DxT, color = tissue, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_18b, aes(x = V1, y = V2,
+            color = tissue, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = tissue_color) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,16)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_18b[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_18b[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+
+# 18f
+ell_DxT_18f <- data.frame()
+for(g in levels(pcdat_18f$DxT)){
+  ell_DxT_18f <- rbind(ell_DxT_18f, cbind(as.data.frame(with(
+    pcdat_18f[pcdat_18f$DxT==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxT=g))   }
+ell_DxT_18f$tissue <- as.factor(unname(sapply(ell_DxT_18f$DxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxT_18f$CO2 <- as.factor(unname(sapply(ell_DxT_18f$DxT, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plot
+DxT_18f <- ggplot() + coord_equal() +
+      geom_path(data = ell_DxT_18f, aes(x = V1, y = V2,
+            group = DxT, color = tissue, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_18f, aes(x = V1, y = V2,
+            color = tissue, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = tissue_color) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,16)) +
+      scale_x_continuous(paste("PCoA 1 (", vars_18f[1], "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", vars_18f[2], "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+
+```
+```{r, echo = FALSE, fig.height = 6}
+#tiff("./figures/DxT_PCoA.tiff", width=8, height=8, units="in", res=600)
+multiplot(DxT_17b, DxT_17f, DxT_18b, DxT_18f, cols = 2)
+#dev.off()
+
+```
+
+### 3e) PCoA 3-way (CO2 x collect x tissue)
+#### 17b
+```{r, include = FALSE}
+## set up data frames
+#leaf
+SbyE_17b %>%
+  filter(tissue == "leaf") -> SbyE_leaf_17b
+SbyE_leaf_17b <- droplevels(SbyE_leaf_17b)
+rownames(SbyE_leaf_17b) <- SbyE_leaf_17b$Label.SRA
+vst_leaf_17b <- vst_17b[row.names(vst_17b) %in% SbyE_leaf_17b$Label.SRA,]
+identical(sort(rownames(SbyE_leaf_17b)), sort(rownames(vst_leaf_17b))) # must be TRUE
+dist_leaf_17b <- stats::dist(vst_leaf_17b, method="euclidean")
+#spike
+SbyE_17b %>%
+  filter(tissue == "spike") -> SbyE_spike_17b
+SbyE_spike_17b <- droplevels(SbyE_spike_17b)
+rownames(SbyE_spike_17b) <- SbyE_spike_17b$Label.SRA
+vst_spike_17b <- vst_17b[row.names(vst_17b) %in% SbyE_spike_17b$Label.SRA,]
+identical(sort(rownames(SbyE_spike_17b)), sort(rownames(vst_spike_17b))) # must be TRUE
+dist_spike_17b <- stats::dist(vst_spike_17b, method="euclidean")
+# setup pcoa
+pcoa_leaf_17b <- cmdscale(dist_leaf_17b, eig =TRUE)
+pcoa_spike_17b <- cmdscale(dist_spike_17b, eig =TRUE)
+# explain vars
+var1_leaf_17b <- round(pcoa_leaf_17b$eig[1] / sum(pcoa_leaf_17b$eig), 3) * 100
+var2_leaf_17b <- round(pcoa_leaf_17b$eig[2] / sum(pcoa_leaf_17b$eig), 3) * 100
+var1_spike_17b <- round(pcoa_spike_17b$eig[1] / sum(pcoa_spike_17b$eig), 3) * 100
+var2_spike_17b <- round(pcoa_spike_17b$eig[2] / sum(pcoa_spike_17b$eig), 3) * 100
+# scores
+scores_leaf_17b <- as.data.frame(pcoa_leaf_17b$points); scores_leaf_17b$ids <- rownames(scores_leaf_17b) 
+pcdat_leaf_17b <- merge(scores_leaf_17b, SbyE_leaf_17b, by.x="ids", by.y="Label.SRA")
+scores_spike_17b <- as.data.frame(pcoa_spike_17b$points); scores_spike_17b$ids <- rownames(scores_spike_17b) 
+pcdat_spike_17b <- merge(scores_spike_17b, SbyE_spike_17b, by.x="ids", by.y="Label.SRA")
+#create ellipses dataframes
+#leaf
+ell_DxC_leaf_17b <- data.frame()
+for(g in levels(pcdat_leaf_17b$DxC)){
+  ell_DxC_leaf_17b <- rbind(ell_DxC_leaf_17b, cbind(as.data.frame(with(
+    pcdat_leaf_17b[pcdat_leaf_17b$DxC==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxC=g))   }
+ell_DxC_leaf_17b$collect <- as.factor(unname(sapply(ell_DxC_leaf_17b$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxC_leaf_17b$CO2 <- as.factor(unname(sapply(ell_DxC_leaf_17b$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#spike
+ell_DxC_spike_17b <- data.frame()
+for(g in levels(pcdat_spike_17b$DxC)){
+  ell_DxC_spike_17b <- rbind(ell_DxC_spike_17b, cbind(as.data.frame(with(
+    pcdat_spike_17b[pcdat_spike_17b$DxC==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxC=g))   }
+ell_DxC_spike_17b$collect <- as.factor(unname(sapply(ell_DxC_spike_17b$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxC_spike_17b$CO2 <- as.factor(unname(sapply(ell_DxC_spike_17b$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plots
+DxC_leaf_17b <- ggplot() + #coord_equal() +
+      geom_path(data = ell_DxC_leaf_17b, aes(x = V1, y = V2,
+            group = DxC, color = collect, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_leaf_17b, aes(x = V1, y = V2,
+            color = collect, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = collect_color[1:3]) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,16)) +
+      scale_x_continuous(paste("PCoA 1 (", var1_leaf_17b, "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", var2_leaf_17b, "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+DxC_spike_17b <- ggplot() + #coord_equal() +
+      geom_path(data = ell_DxC_spike_17b, aes(x = V1, y = V2,
+            group = DxC, color = collect, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_spike_17b, aes(x = V1, y = V2,
+            color = collect, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = collect_color[1:3]) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,16)) +
+      scale_x_continuous(paste("PCoA 1 (", var1_spike_17b, "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", var2_spike_17b, "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+```
+```{r, echo = FALSE}
+#tiff("./figures/DxCxT_PCoA_17b.tiff", width=8, height=4, units="in", res=600)
+multiplot(DxC_leaf_17b, DxC_spike_17b, cols = 2)
+#dev.off()
+
+```
+
+#### 17f
+```{r, include = FALSE}
+## set up data frames
+#leaf
+SbyE_17f %>%
+  filter(tissue == "leaf") -> SbyE_leaf_17f
+SbyE_leaf_17f <- droplevels(SbyE_leaf_17f)
+rownames(SbyE_leaf_17f) <- SbyE_leaf_17f$Label.SRA
+vst_leaf_17f <- vst_17f[row.names(vst_17f) %in% SbyE_leaf_17f$Label.SRA,]
+identical(sort(rownames(SbyE_leaf_17f)), sort(rownames(vst_leaf_17f))) # must be TRUE
+dist_leaf_17f <- stats::dist(vst_leaf_17f, method="euclidean")
+#spike
+SbyE_17f %>%
+  filter(tissue == "spike") -> SbyE_spike_17f
+SbyE_spike_17f <- droplevels(SbyE_spike_17f)
+rownames(SbyE_spike_17f) <- SbyE_spike_17f$Label.SRA
+vst_spike_17f <- vst_17f[row.names(vst_17f) %in% SbyE_spike_17f$Label.SRA,]
+identical(sort(rownames(SbyE_spike_17f)), sort(rownames(vst_spike_17f))) # must be TRUE
+dist_spike_17f <- stats::dist(vst_spike_17f, method="euclidean")
+# setup pcoa
+pcoa_leaf_17f <- cmdscale(dist_leaf_17f, eig =TRUE)
+pcoa_spike_17f <- cmdscale(dist_spike_17f, eig =TRUE)
+# explain vars
+var1_leaf_17f <- round(pcoa_leaf_17f$eig[1] / sum(pcoa_leaf_17f$eig), 3) * 100
+var2_leaf_17f <- round(pcoa_leaf_17f$eig[2] / sum(pcoa_leaf_17f$eig), 3) * 100
+var1_spike_17f <- round(pcoa_spike_17f$eig[1] / sum(pcoa_spike_17f$eig), 3) * 100
+var2_spike_17f <- round(pcoa_spike_17f$eig[2] / sum(pcoa_spike_17f$eig), 3) * 100
+# scores
+scores_leaf_17f <- as.data.frame(pcoa_leaf_17f$points); scores_leaf_17f$ids <- rownames(scores_leaf_17f) 
+pcdat_leaf_17f <- merge(scores_leaf_17f, SbyE_leaf_17f, by.x="ids", by.y="Label.SRA")
+scores_spike_17f <- as.data.frame(pcoa_spike_17f$points); scores_spike_17f$ids <- rownames(scores_spike_17f) 
+pcdat_spike_17f <- merge(scores_spike_17f, SbyE_spike_17f, by.x="ids", by.y="Label.SRA")
+#create ellipses dataframes
+#leaf
+ell_DxC_leaf_17f <- data.frame()
+for(g in levels(pcdat_leaf_17f$DxC)){
+  ell_DxC_leaf_17f <- rbind(ell_DxC_leaf_17f, cbind(as.data.frame(with(
+    pcdat_leaf_17f[pcdat_leaf_17f$DxC==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxC=g))   }
+ell_DxC_leaf_17f$collect <- as.factor(unname(sapply(ell_DxC_leaf_17f$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxC_leaf_17f$CO2 <- as.factor(unname(sapply(ell_DxC_leaf_17f$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#spike
+ell_DxC_spike_17f <- data.frame()
+for(g in levels(pcdat_spike_17f$DxC)){
+  ell_DxC_spike_17f <- rbind(ell_DxC_spike_17f, cbind(as.data.frame(with(
+    pcdat_spike_17f[pcdat_spike_17f$DxC==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxC=g))   }
+ell_DxC_spike_17f$collect <- as.factor(unname(sapply(ell_DxC_spike_17f$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxC_spike_17f$CO2 <- as.factor(unname(sapply(ell_DxC_spike_17f$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plots
+DxC_leaf_17f <- ggplot() + #coord_equal() +
+      geom_path(data = ell_DxC_leaf_17f, aes(x = V1, y = V2,
+            group = DxC, color = collect, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_leaf_17f, aes(x = V1, y = V2,
+            color = collect, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = collect_color[1:3]) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,16)) +
+      scale_x_continuous(paste("PCoA 1 (", var1_leaf_17f, "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", var2_leaf_17f, "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+DxC_spike_17f <- ggplot() + #coord_equal() +
+      geom_path(data = ell_DxC_spike_17f, aes(x = V1, y = V2,
+            group = DxC, color = collect, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_spike_17f, aes(x = V1, y = V2,
+            color = collect, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = collect_color[1:3]) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,16)) +
+      scale_x_continuous(paste("PCoA 1 (", var1_spike_17f, "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", var2_spike_17f, "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+```
+```{r, echo = FALSE}
+#tiff("./figures/DxCxT_PCoA_17f.tiff", width=8, height=4, units="in", res=600)
+multiplot(DxC_leaf_17f, DxC_spike_17f, cols = 2)
+#dev.off()
+
+```
+
+#### 18b
+```{r, include = FALSE}
+## set up data frames
+#leaf
+SbyE_18b %>%
+  filter(tissue == "leaf") -> SbyE_leaf_18b
+SbyE_leaf_18b <- droplevels(SbyE_leaf_18b)
+rownames(SbyE_leaf_18b) <- SbyE_leaf_18b$Label.SRA
+vst_leaf_18b <- vst_18b[row.names(vst_18b) %in% SbyE_leaf_18b$Label.SRA,]
+identical(sort(rownames(SbyE_leaf_18b)), sort(rownames(vst_leaf_18b))) # must be TRUE
+dist_leaf_18b <- stats::dist(vst_leaf_18b, method="euclidean")
+#spike
+SbyE_18b %>%
+  filter(tissue == "spike") -> SbyE_spike_18b
+SbyE_spike_18b <- droplevels(SbyE_spike_18b)
+rownames(SbyE_spike_18b) <- SbyE_spike_18b$Label.SRA
+vst_spike_18b <- vst_18b[row.names(vst_18b) %in% SbyE_spike_18b$Label.SRA,]
+identical(sort(rownames(SbyE_spike_18b)), sort(rownames(vst_spike_18b))) # must be TRUE
+dist_spike_18b <- stats::dist(vst_spike_18b, method="euclidean")
+# setup pcoa
+pcoa_leaf_18b <- cmdscale(dist_leaf_18b, eig =TRUE)
+pcoa_spike_18b <- cmdscale(dist_spike_18b, eig =TRUE)
+# explain vars
+var1_leaf_18b <- round(pcoa_leaf_18b$eig[1] / sum(pcoa_leaf_18b$eig), 3) * 100
+var2_leaf_18b <- round(pcoa_leaf_18b$eig[2] / sum(pcoa_leaf_18b$eig), 3) * 100
+var1_spike_18b <- round(pcoa_spike_18b$eig[1] / sum(pcoa_spike_18b$eig), 3) * 100
+var2_spike_18b <- round(pcoa_spike_18b$eig[2] / sum(pcoa_spike_18b$eig), 3) * 100
+# scores
+scores_leaf_18b <- as.data.frame(pcoa_leaf_18b$points); scores_leaf_18b$ids <- rownames(scores_leaf_18b) 
+pcdat_leaf_18b <- merge(scores_leaf_18b, SbyE_leaf_18b, by.x="ids", by.y="Label.SRA")
+scores_spike_18b <- as.data.frame(pcoa_spike_18b$points); scores_spike_18b$ids <- rownames(scores_spike_18b) 
+pcdat_spike_18b <- merge(scores_spike_18b, SbyE_spike_18b, by.x="ids", by.y="Label.SRA")
+#create ellipses dataframes
+#leaf
+ell_DxC_leaf_18b <- data.frame()
+for(g in levels(pcdat_leaf_18b$DxC)){
+  ell_DxC_leaf_18b <- rbind(ell_DxC_leaf_18b, cbind(as.data.frame(with(
+    pcdat_leaf_18b[pcdat_leaf_18b$DxC==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxC=g))   }
+ell_DxC_leaf_18b$collect <- as.factor(unname(sapply(ell_DxC_leaf_18b$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxC_leaf_18b$CO2 <- as.factor(unname(sapply(ell_DxC_leaf_18b$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#spike
+ell_DxC_spike_18b <- data.frame()
+for(g in levels(pcdat_spike_18b$DxC)){
+  ell_DxC_spike_18b <- rbind(ell_DxC_spike_18b, cbind(as.data.frame(with(
+    pcdat_spike_18b[pcdat_spike_18b$DxC==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxC=g))   }
+ell_DxC_spike_18b$collect <- as.factor(unname(sapply(ell_DxC_spike_18b$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxC_spike_18b$CO2 <- as.factor(unname(sapply(ell_DxC_spike_18b$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plots
+DxC_leaf_18b <- ggplot() + #coord_equal() +
+      geom_path(data = ell_DxC_leaf_18b, aes(x = V1, y = V2,
+            group = DxC, color = collect, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_leaf_18b, aes(x = V1, y = V2,
+            color = collect, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = leaf_collect_color) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,7)) +
+      scale_x_continuous(paste("PCoA 1 (", var1_leaf_18b, "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", var2_leaf_18b, "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+DxC_spike_18b <- ggplot() + #coord_equal() +
+      geom_path(data = ell_DxC_spike_18b, aes(x = V1, y = V2,
+            group = DxC, color = collect, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_spike_18b, aes(x = V1, y = V2,
+            color = collect, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = collect_color) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,7)) +
+      scale_x_continuous(paste("PCoA 1 (", var1_spike_18b, "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", var2_spike_18b, "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+```
+```{r, echo = FALSE}
+#tiff("./figures/DxCxT_PCoA_18b.tiff", width=10, height=4.5, units="in", res=600)
+multiplot(DxC_leaf_18b, DxC_spike_18b, cols = 2)
+#dev.off()
+
+```
+
+#### 18f
+```{r, include = FALSE}
+## set up data frames
+#leaf
+SbyE_18f %>%
+  filter(tissue == "leaf") -> SbyE_leaf_18f
+SbyE_leaf_18f <- droplevels(SbyE_leaf_18f)
+rownames(SbyE_leaf_18f) <- SbyE_leaf_18f$Label.SRA
+vst_leaf_18f <- vst_18f[row.names(vst_18f) %in% SbyE_leaf_18f$Label.SRA,]
+identical(sort(rownames(SbyE_leaf_18f)), sort(rownames(vst_leaf_18f))) # must be TRUE
+dist_leaf_18f <- stats::dist(vst_leaf_18f, method="euclidean")
+#spike
+SbyE_18f %>%
+  filter(tissue == "spike") -> SbyE_spike_18f
+SbyE_spike_18f <- droplevels(SbyE_spike_18f)
+rownames(SbyE_spike_18f) <- SbyE_spike_18f$Label.SRA
+vst_spike_18f <- vst_18f[row.names(vst_18f) %in% SbyE_spike_18f$Label.SRA,]
+identical(sort(rownames(SbyE_spike_18f)), sort(rownames(vst_spike_18f))) # must be TRUE
+dist_spike_18f <- stats::dist(vst_spike_18f, method="euclidean")
+# setup pcoa
+pcoa_leaf_18f <- cmdscale(dist_leaf_18f, eig =TRUE)
+pcoa_spike_18f <- cmdscale(dist_spike_18f, eig =TRUE)
+# explain vars
+var1_leaf_18f <- round(pcoa_leaf_18f$eig[1] / sum(pcoa_leaf_18f$eig), 3) * 100
+var2_leaf_18f <- round(pcoa_leaf_18f$eig[2] / sum(pcoa_leaf_18f$eig), 3) * 100
+var1_spike_18f <- round(pcoa_spike_18f$eig[1] / sum(pcoa_spike_18f$eig), 3) * 100
+var2_spike_18f <- round(pcoa_spike_18f$eig[2] / sum(pcoa_spike_18f$eig), 3) * 100
+# scores
+scores_leaf_18f <- as.data.frame(pcoa_leaf_18f$points); scores_leaf_18f$ids <- rownames(scores_leaf_18f) 
+pcdat_leaf_18f <- merge(scores_leaf_18f, SbyE_leaf_18f, by.x="ids", by.y="Label.SRA")
+scores_spike_18f <- as.data.frame(pcoa_spike_18f$points); scores_spike_18f$ids <- rownames(scores_spike_18f) 
+pcdat_spike_18f <- merge(scores_spike_18f, SbyE_spike_18f, by.x="ids", by.y="Label.SRA")
+#create ellipses dataframes
+#leaf
+ell_DxC_leaf_18f <- data.frame()
+for(g in levels(pcdat_leaf_18f$DxC)){
+  ell_DxC_leaf_18f <- rbind(ell_DxC_leaf_18f, cbind(as.data.frame(with(
+    pcdat_leaf_18f[pcdat_leaf_18f$DxC==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxC=g))   }
+ell_DxC_leaf_18f$collect <- as.factor(unname(sapply(ell_DxC_leaf_18f$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxC_leaf_18f$CO2 <- as.factor(unname(sapply(ell_DxC_leaf_18f$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#spike
+ell_DxC_spike_18f <- data.frame()
+for(g in levels(pcdat_spike_18f$DxC)){
+  ell_DxC_spike_18f <- rbind(ell_DxC_spike_18f, cbind(as.data.frame(with(
+    pcdat_spike_18f[pcdat_spike_18f$DxC==g,],
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+        wt=rep(1/length(V1),length(V1)))$cov,
+        center=c(mean(V1), mean(V2)))   )) , DxC=g))   }
+ell_DxC_spike_18f$collect <- as.factor(unname(sapply(ell_DxC_spike_18f$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][2]  )))
+ell_DxC_spike_18f$CO2 <- as.factor(unname(sapply(ell_DxC_spike_18f$DxC, 
+            function(fname) strsplit(fname, "[-]")[[1]][1]  )))
+#plots
+DxC_leaf_18f <- ggplot() + #coord_equal() +
+      geom_path(data = ell_DxC_leaf_18f, aes(x = V1, y = V2,
+            group = DxC, color = collect, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_leaf_18f, aes(x = V1, y = V2,
+            color = collect, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = leaf_collect_color) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,7)) +
+      scale_x_continuous(paste("PCoA 1 (", var1_leaf_18f, "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", var2_leaf_18f, "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+DxC_spike_18f <- ggplot() + #coord_equal() +
+      geom_path(data = ell_DxC_spike_18f, aes(x = V1, y = V2,
+            group = DxC, color = collect, linetype = CO2),
+            size = 1.1, show.legend = TRUE) +
+      geom_point(data = pcdat_spike_18f, aes(x = V1, y = V2,
+            color = collect, shape = CO2 ) , size = 2) +
+      scale_color_manual("", values = collect_color) +
+      scale_linetype_manual("", values = c(1,2)) +
+      scale_shape_manual("", values = c(15,7)) +
+      scale_x_continuous(paste("PCoA 1 (", var1_spike_18f, "%)", sep = "")) +
+      scale_y_continuous(paste("PCoA 2 (", var2_spike_18f, "%)", sep = "")) +
+      theme(legend.key.width = unit(.7, "cm"), axis.title = element_text(size = 12),
+           legend.text=element_text(size=10), legend.title=element_text(size=12),
+           legend.background = element_rect(colour = NA, fill = NA),
+           legend.position = "bottom", legend.box = "vertical", legend.margin=margin())
+```
+```{r, echo = FALSE}
+#tiff("./figures/DxCxT_PCoA_18f.tiff", width=11, height=4.5, units="in", res=600)
+multiplot(DxC_leaf_18f, DxC_spike_18f, cols = 2)
+#dev.off()
+
+```
+
+```{r, fig.keep='none'}
+p1 <- DxT_17b + guides(colour = 'none', shape = 'none', linetype = 'none') +
+    annotate(geom="text", x=-8.8, y=5.5, label="A)\n17b", cex=5)
+p2 <- DxT_17f + guides(colour = 'none', shape = 'none', linetype = 'none') +
+    annotate(geom="text", x=-6.4, y=5.3, label="B)\n17f", cex=5)
+p3 <- DxC_leaf_18b + guides(colour = 'none', shape = 'none', linetype = 'none') + 
+    annotate(geom="text", x=-8, y=5.6, label="C) Leaves\n18b", cex=5)
+p4 <- DxC_spike_18b + guides(colour = 'none', shape = 'none', linetype = 'none') + 
+    annotate(geom="text", x=-6.7, y=5, label="D) Spikes\n18b", cex=5)
+p5 <- DxC_leaf_18f + guides(colour = 'none', shape = 'none', linetype = 'none') + 
+    annotate(geom="text", x=-6.7, y=5.8, label="E) Leaves\n18f", cex=5)
+p6 <- DxC_spike_18f + guides(colour = 'none', shape = 'none', linetype = 'none') + 
+    annotate(geom="text", x=-7.7, y=6.4, label="F) Spikes\n18f", cex=5)
+```
+
+
+### 3f) PCoAs for Manuscript
+```{r, fig.keep='none'}
+#tiff("./figures/Figure1_PCoA.tiff", width = 180, height = 260, units = "mm", res = 600)
+ggarrange(p1, p2, p3, p4, p5, p6,
+          widths = c(1,1), heights = c(1,1,1))
+#dev.off()
+ 
+p7 <- tissue_17b + annotate(geom="text", x=-8.5, y=6, label="A)", cex=5)
+p8 <- tissue_17f + annotate(geom="text", x=-6.3, y=5.6, label="B)", cex=5)
+p9 <- tissue_18b + annotate(geom="text", x=-12.8, y=7.2, label="C)", cex=5)
+p10 <- tissue_18f+ annotate(geom="text", x=-13.5, y=7.3, label="D)", cex=5)
+
+#tiff("./figures/FigureS1_PCoA.tiff", width=8, height=8, units="in", res=600)
+ggarrange(p7, p8, p9, p10, 
+          widths = c(1,1), heights = c(1,1))
+#dev.off()
+
+
+# multiplot(DxT_17b, DxT_17f,
+#           DxC_18b,CxT_18b,
+#           DxC_leaf_18f, DxC_spike_18f, 
+#           cols = 2)
+
+```
+
+
+
+# 4) Alpha Diversity
+* This is the richness and shannon diversity for the unfiltered datasets.
+
+```{r, echo = FALSE, results = 'hide', fig.keep = 'none'}
+hist(SbyE_17b$Observed)
+hist(SbyE_17f$Observed)
+hist(SbyE_18b$Observed) 
+hist(SbyE_18f$Observed) #overall, not too shabby as approx normal dist
+
+hist(SbyE_17b$Shannon)
+hist(SbyE_17f$Shannon)
+hist(SbyE_18b$Shannon, breaks = 10)
+hist(SbyE_18f$Shannon) #overall, normally dist
+
+```
+
+### 4a) Richness
+
+```{r}
+# rich_17b <- lm.rrpp(Observed ~ CO2 + collect + tissue + CO2:plot_n +
+#         CO2:collect + CO2:tissue + collect:tissue +
+#         CO2:collect:tissue + CO2:collect:plot_n + CO2:tissue:plot_n +
+#         CO2:collect:tissue:plot_n,
+#         iter = 999,
+#         print.progress = TRUE, data = SbyE_17b, SS.type = "III")
+# save(rich_17b, file="./intermediate/FACE_RRPP_S_17b.RData")
+load("./intermediate/FACE_RRPP_S_17b.RData")
+anovaS_17b <- anova(rich_17b, effect.type = "F", 
+            error = c("CO2:plot_n", "CO2:collect:plot_n", 
+            "CO2:tissue:plot_n", "Residuals", "CO2:collect:plot_n",
+            "CO2:tissue:plot_n", "CO2:collect:tissue:plot_n",
+            "CO2:collect:tissue:plot_n", 
+            "Residuals", "Residuals","Residuals"))
+summary(anovaS_17b, formula = false)
+# capture.output(summary(anovaS_17b, formula = false),
+#    file = file.path("./tables/FACE_RRPP_S_17b.txt"))
+
+# rich_17f <- lm.rrpp(Observed ~ CO2 + collect + tissue + CO2:plot_n +
+#         CO2:collect + CO2:tissue + collect:tissue +
+#         CO2:collect:tissue + CO2:collect:plot_n + CO2:tissue:plot_n +
+#         CO2:collect:tissue:plot_n,
+#         iter = 999,
+#         print.progress = TRUE, data = SbyE_17f, SS.type = "III")
+# save(rich_17f, file="./intermediate/FACE_RRPP_S_17f.RData")
+load("./intermediate/FACE_RRPP_S_17f.RData")
+anovaS_17f <- anova(rich_17f, effect.type = "F", 
+            error = c("CO2:plot_n", "CO2:collect:plot_n", 
+            "CO2:tissue:plot_n", "Residuals", "CO2:collect:plot_n",
+            "CO2:tissue:plot_n", "CO2:collect:tissue:plot_n",
+            "CO2:collect:tissue:plot_n", 
+            "Residuals", "Residuals","Residuals"))
+summary(anovaS_17f, formula = false)
+# capture.output(summary(anovaS_17f, formula = false),
+#    file = file.path("./tables/FACE_RRPP_S_17f.txt"))
+
+
+# rich_18b <- lm.rrpp(Observed ~ CO2 + collect + tissue + CO2:plot_n +
+#         CO2:collect + CO2:tissue + collect:tissue +
+#         CO2:collect:tissue + CO2:collect:plot_n + CO2:tissue:plot_n +
+#         CO2:collect:tissue:plot_n,
+#         iter = 999,
+#         print.progress = TRUE, data = SbyE_18b, SS.type = "III")
+# save(rich_18b, file="./intermediate/FACE_RRPP_S_18b.RData")
+load("./intermediate/FACE_RRPP_S_18b.RData")
+anovaS_18b <- anova(rich_18b, effect.type = "F", 
+            error = c("CO2:plot_n", "CO2:collect:plot_n", 
+            "CO2:tissue:plot_n", "Residuals", "CO2:collect:plot_n",
+            "CO2:tissue:plot_n", "CO2:collect:tissue:plot_n",
+            "CO2:collect:tissue:plot_n", 
+            "Residuals", "Residuals","Residuals"))
+summary(anovaS_18b, formula = false)
+# capture.output(summary(anovaS_18b, formula = false),
+#    file = file.path("./tables/FACE_RRPP_S_18b.txt"))
+
+
+# rich_18f <- lm.rrpp(Observed ~ CO2 + collect + tissue + CO2:plot_n +
+#         CO2:collect + CO2:tissue + collect:tissue +
+#         CO2:collect:tissue + CO2:collect:plot_n + CO2:tissue:plot_n +
+#         CO2:collect:tissue:plot_n,
+#         iter = 999,
+#         print.progress = TRUE, data = SbyE_18f, SS.type = "III")
+# save(rich_18f, file="./intermediate/FACE_RRPP_S_18f.RData")
+load("./intermediate/FACE_RRPP_S_18f.RData")
+anovaS_18f <- anova(rich_18f, effect.type = "F", 
+            error = c("CO2:plot_n", "CO2:collect:plot_n", 
+            "CO2:tissue:plot_n", "Residuals", "CO2:collect:plot_n",
+            "CO2:tissue:plot_n", "CO2:collect:tissue:plot_n",
+            "CO2:collect:tissue:plot_n", 
+            "Residuals", "Residuals","Residuals"))
+summary(anovaS_18f, formula = false)
+# capture.output(summary(anovaS_18f, formula = false),
+#    file = file.path("./tables/FACE_RRPP_S_18f.txt"))
+
+pairwise(fit = rich_18f, groups = SbyE_18f$CO2)  #interaction(SbyE_17b$CO2, SbyE_17b$plot_n)
+
+
+```
+
+### 4b) Shannon Diversity
+```{r}
+# div_17b <- lm.rrpp(Shannon ~ CO2 + collect + tissue + CO2:plot_n +
+#         CO2:collect + CO2:tissue + collect:tissue +
+#         CO2:collect:tissue + CO2:collect:plot_n + CO2:tissue:plot_n +
+#         CO2:collect:tissue:plot_n,
+#         iter = 999,
+#         print.progress = TRUE, data = SbyE_17b, SS.type = "III")
+# save(div_17b, file="./intermediate/FACE_RRPP_H_17b.RData")
+load("./intermediate/FACE_RRPP_H_17b.RData")
+anovaH_17b <- anova(div_17b, effect.type = "F", 
+            error = c("CO2:plot_n", "CO2:collect:plot_n", 
+            "CO2:tissue:plot_n", "Residuals", "CO2:collect:plot_n",
+            "CO2:tissue:plot_n", "CO2:collect:tissue:plot_n",
+            "CO2:collect:tissue:plot_n", 
+            "Residuals", "Residuals","Residuals"))
+summary(anovaH_17b, formula = false)
+# capture.output(summary(anovaH_17b, formula = false),
+#    file = file.path("./tables/FACE_RRPP_H_17b.txt"))
+
+# div_17f <- lm.rrpp(Shannon ~ CO2 + collect + tissue + CO2:plot_n +
+#         CO2:collect + CO2:tissue + collect:tissue +
+#         CO2:collect:tissue + CO2:collect:plot_n + CO2:tissue:plot_n +
+#         CO2:collect:tissue:plot_n,
+#         iter = 999,
+#         print.progress = TRUE, data = SbyE_17f, SS.type = "III")
+# save(div_17f, file="./intermediate/FACE_RRPP_H_17f.RData")
+load("./intermediate/FACE_RRPP_H_17f.RData")
+anovaH_17f <- anova(div_17f, effect.type = "F", 
+            error = c("CO2:plot_n", "CO2:collect:plot_n", 
+            "CO2:tissue:plot_n", "Residuals", "CO2:collect:plot_n",
+            "CO2:tissue:plot_n", "CO2:collect:tissue:plot_n",
+            "CO2:collect:tissue:plot_n", 
+            "Residuals", "Residuals","Residuals"))
+summary(anovaH_17f, formula = false)
+# capture.output(summary(anovaH_17f, formula = false),
+#    file = file.path("./tables/FACE_RRPP_H_17f.txt"))
+
+
+# div_18b <- lm.rrpp(Shannon ~ CO2 + collect + tissue + CO2:plot_n +
+#         CO2:collect + CO2:tissue + collect:tissue +
+#         CO2:collect:tissue + CO2:collect:plot_n + CO2:tissue:plot_n +
+#         CO2:collect:tissue:plot_n,
+#         iter = 999,
+#         print.progress = TRUE, data = SbyE_18b, SS.type = "III")
+# save(div_18b, file="./intermediate/FACE_RRPP_H_18b.RData")
+load("./intermediate/FACE_RRPP_H_18b.RData")
+anovaH_18b <- anova(div_18b, effect.type = "F", 
+            error = c("CO2:plot_n", "CO2:collect:plot_n", 
+            "CO2:tissue:plot_n", "Residuals", "CO2:collect:plot_n",
+            "CO2:tissue:plot_n", "CO2:collect:tissue:plot_n",
+            "CO2:collect:tissue:plot_n", 
+            "Residuals", "Residuals","Residuals"))
+summary(anovaH_18b, formula = false)
+# capture.output(summary(anovaH_18b, formula = false),
+#    file = file.path("./tables/FACE_RRPP_H_18b.txt"))
+
+
+# div_18f <- lm.rrpp(Shannon ~ CO2 + collect + tissue + CO2:plot_n +
+#         CO2:collect + CO2:tissue + collect:tissue +
+#         CO2:collect:tissue + CO2:collect:plot_n + CO2:tissue:plot_n +
+#         CO2:collect:tissue:plot_n,
+#         iter = 999,
+#         print.progress = TRUE, data = SbyE_18f, SS.type = "III")
+# save(div_18f, file="./intermediate/FACE_RRPP_H_18f.RData")
+load("./intermediate/FACE_RRPP_H_18f.RData")
+anovaH_18f <- anova(div_18f, effect.type = "F", 
+            error = c("CO2:plot_n", "CO2:collect:plot_n", 
+            "CO2:tissue:plot_n", "Residuals", "CO2:collect:plot_n",
+            "CO2:tissue:plot_n", "CO2:collect:tissue:plot_n",
+            "CO2:collect:tissue:plot_n", 
+            "Residuals", "Residuals","Residuals"))
+summary(anovaH_18f, formula = false)
+# capture.output(summary(anovaH_18f, formula = false),
+#    file = file.path("./tables/FACE_RRPP_H_18f.txt"))
+
+```
+
+### 4c) Plot Alpha Div 
+```{r, include = FALSE}
+h_17b <- ggplot(SbyE_17b, aes(y = Shannon, x = collect, fill = collect)) + 
+    facet_wrap(plot_n~CO2, ncol = 2) +
+    geom_boxplot(aes(y = Shannon, group = collect)) + 
+    geom_jitter(size = 2, position = position_jitter(width = .1)) +
+    scale_fill_manual(values = collect_color) + guides(fill='none') +
+    scale_x_discrete("Collection")    #expression(CO[2])
+    #annotate("text", x=.65, y=10.1, label="(B)", size=4)
+h_17b
+h_17f <- ggplot(SbyE_17f, aes(y = Shannon, x = collect, fill = collect)) + 
+    #facet_grid(~collect) + 
+    geom_boxplot(aes(y = Shannon, group = collect)) + 
+    geom_jitter(size = 2, position = position_jitter(width = .1)) +
+    scale_fill_manual(values = collect_color) + guides(fill='none') +
+    scale_x_discrete("Collection")
+    #annotate("text", x=.65, y=10.1, label="(B)", size=4)
+h_17f
+h_18b <- ggplot(SbyE_18b, aes(y = Shannon, x = collect, fill = collect)) + 
+    facet_wrap(~CO2, ncol = 2) + 
+    geom_boxplot(aes(y = Shannon, group = collect)) + 
+    geom_jitter(size = 2, position = position_jitter(width = .1)) +
+    scale_fill_manual(values = collect_color) + guides(fill='none') +
+    scale_x_discrete("Collection")
+    #annotate("text", x=.65, y=10.1, label="(B)", size=4)
+h_18f <- ggplot(SbyE_18f, aes(y = Shannon, x = collect, fill = collect)) + 
+    facet_wrap(~CO2, ncol = 2) + 
+    geom_boxplot(aes(y = Shannon, group = collect)) + 
+    geom_jitter(size = 2, position = position_jitter(width = .1)) +
+    scale_fill_manual(values = collect_color) + guides(fill='none') +
+    scale_x_discrete("Collection")
+    #annotate("text", x=.65, y=10.1, label="(B)", size=4)
+```
+
+```{r, echo = FALSE, fig.height = 10}
+#tiff("./figures/CO2xCollect_Shannon_2018.tiff", width=6, height=7, units="in", res=600)
+multiplot(h_18b, h_18f, cols = 1)
+#dev.off()
+
+```
+
+```{r, include = FALSE}
+s_17b <- ggplot(SbyE_17b, aes(y = Observed, x = CO2, fill = CO2)) + 
+    facet_grid(~plot_n) + scale_y_continuous("Observed ASV Richness") +
+    geom_boxplot(aes(y = Observed, group = CO2), outlier.shape = NA) + 
+    geom_jitter(size = 2, position = position_jitter(width = .1)) +
+    scale_fill_manual(values = co2_color) + guides(fill='none') +
+    scale_x_discrete(expression(CO[2]))
+    #annotate("text", x=.65, y=10.1, label="(B)", size=4)
+s_17f <- ggplot(SbyE_17f, aes(y = Observed, x = CO2, fill = CO2)) + 
+    facet_grid(~tissue) + scale_y_continuous("Observed ASV Richness") +
+    geom_boxplot(aes(y = Observed, group = CO2), outlier.shape = NA) + 
+    geom_jitter(size = 2, position = position_jitter(width = .1)) +
+    scale_fill_manual(values = co2_color) + guides(fill='none') +
+    scale_x_discrete(expression(CO[2]))
+    #annotate("text", x=.65, y=10.1, label="(B)", size=4)
+s_18b <- ggplot(SbyE_18b, aes(y = Observed, x = CO2, fill = CO2)) + 
+    facet_grid(~collect) + scale_y_continuous("Observed ASV Richness") +
+    geom_boxplot(aes(y = Observed, group = CO2), outlier.shape = NA) + 
+    geom_jitter(size = 2, position = position_jitter(width = .1)) +
+    scale_fill_manual(values = co2_color) + guides(fill='none') +
+    scale_x_discrete(expression(CO[2]))
+    #annotate("text", x=.65, y=10.1, label="(B)", size=4)
+# s_18f <- ggplot(SbyE_18f, aes(y = Observed, x = CO2, fill = CO2)) + 
+#     facet_grid(~tissue) +  scale_y_continuous("Observed ASV Richness") +
+#     geom_boxplot(aes(y = Observed, group = CO2), outlier.shape = NA) + 
+#     geom_jitter(size = 2, position = position_jitter(width = .1)) +
+#     scale_fill_manual(values = co2_color) + guides(fill='none') +
+#     scale_x_discrete(expression(CO[2]))
+
+s_18f_l <- ggplot(SbyE_18f[SbyE_18f$tissue == "leaf",], aes(y = Observed, x = CO2, fill = CO2)) + 
+    facet_grid(~plot_n) +  scale_y_continuous("Observed ASV Richness") +
+    geom_boxplot(aes(y = Observed, group = CO2), outlier.shape = NA) + 
+    geom_jitter(size = 2, position = position_jitter(width = .1)) +
+    scale_fill_manual(values = co2_color) + guides(fill='none') +
+    scale_x_discrete(expression(CO[2]))
+    #annotate("text", x=.65, y=10.1, label="(B)", size=4)
+s_18f_s <- ggplot(SbyE_18f[SbyE_18f$tissue == "spike",], aes(y = Observed, x = CO2, fill = CO2)) + 
+    facet_grid(~plot_n) +  scale_y_continuous("Observed ASV Richness") +
+    geom_boxplot(aes(y = Observed, group = CO2), outlier.shape = NA) + 
+    geom_jitter(size = 2, position = position_jitter(width = .1)) +
+    scale_fill_manual(values = co2_color) + guides(fill='none') +
+    scale_x_discrete(expression(CO[2]))
+
+
+
+#multiplot(s_17b, s_17f, s_18b, s_18f, cols = 1)
+```
+
+```{r, echo = FALSE, fig.height = 10}
+#tiff("./figures/CO2xCollect_Observed.tiff", width=180, height=320, units="mm", res=600)
+ggarrange(s_17b, s_17f, s_18b, s_18f_l, s_18f_s, ncol=1,
+          widths = c(4), heights = c(1,1,1,1,1),
+          labels = c("A)", "B)", "C)", "D)", "E)"), 
+          label.args = list(gp=gpar(font=2, fontsize=16), x=unit(1,"line"), hjust=-.5, vjust=1.5))
+#dev.off()
+
+```
+
+
+```{r, echo = FALSE, fig.height = 10}
+s_18f_TxPlot <- ggplot(SbyE_18f, aes(y = Observed, x = CO2, fill = CO2)) + 
+    facet_grid(plot_n~tissue) +  scale_y_continuous("Observed ASV Richness") +
+    geom_boxplot(aes(y = Observed, group = CO2), outlier.shape = NA) + 
+    geom_jitter(size = 2, position = position_jitter(width = .1)) +
+    scale_fill_manual(values = co2_color) + guides(fill='none') +
+    scale_x_discrete(expression(CO[2]))
+#tiff("./figures/TxPlot_18f_Observed.tiff", width=5, height=8, units="in", res=600)
+s_18f_TxPlot
+#dev.off()
+```
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+#### end

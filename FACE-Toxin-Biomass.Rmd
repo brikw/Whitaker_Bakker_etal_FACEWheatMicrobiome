@@ -1,0 +1,227 @@
+---
+title: "FACE Toxin & Fusarium load data"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+author: "Briana K. Whitaker"
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning=FALSE, message=FALSE)
+```
+
+* Run using `r version[['version.string']] `.
+
+# Objective
+This document reports on the analysis of Toxin (ug DON/g tissue) and fungal biomass from Glenn wheat samples inoculated in the SoyFACE field experiment with GZ3639 in 2017 and 2018. 
+
+
+
+## Details
+Field experiment was conducted as part of SOY-FACE ambient and elevevated CO2 experiments at UIUC. Fungal biomass was constructed in 2017 from a single gene of Fusarium and single gene of wheat, using Bio_Rad, and expressed as a ratio. Fungal biomass in 2018 was constructed from multiple genes using Fluidigm, also expressed as a ratio.
+DON concentrations were measured by Susan McCormick.
+
+
+# 0) Load Packages, functions, source scripts
+```{r, echo = FALSE, results = 'hide', include = FALSE} 
+x <- c("car", "ggplot2", "dplyr", "lme4", "plyr", "reshape2", "tinytex", "egg")
+lapply(x, require, character.only = TRUE)
+
+#Load functions
+source("./code/multiplot.function.R")
+#add 'not in' function
+`%nin%` = Negate(`%in%`)
+
+#set seed
+#runif(1, min = 0, max = 1000)
+set.seed(711)
+
+# set ggplot2 theme
+theme_set(theme_bw(base_size = 14)) 
+theme_update(panel.grid.major = element_line(0), panel.grid.minor = element_line(0))
+
+
+require(RColorBrewer)
+display.brewer.pal(4, "Set1")
+brewer.pal(4, "Set1")
+co2_color <- c("#377EB8", "#E41A1C") 
+tissue_color <- c("#4DAF4A", "#984EA3") 
+display.brewer.pal(6, "BuPu")
+brewer.pal(6, "BuPu")
+collect_color <- c("#9EBCDA", "#8C96C6", "#8856A7", "#810F7C") 
+```
+
+
+# 1) Load data
+```{r, results = 'hide'} 
+yr2017 <- read.csv("./data/2017 FACE field data Biomass and DON.csv", stringsAsFactors = TRUE)
+yr2018 <- read.csv("./data/2018 Data Biomass and Toxin.csv", stringsAsFactors = TRUE)
+
+# convert treatments to factors
+# NOTE - for now converting day collected in 2018 to a factor, not numeric
+yr2017$year <- as.factor(yr2017$year); yr2017$plot <- as.factor(yr2017$plot); 
+yr2017$replicate <- as.factor(yr2017$replicate)
+yr2018$year <- as.factor(yr2018$year); yr2018$plot <- as.factor(yr2018$plot); 
+yr2018$day <- as.factor(yr2018$day); yr2018$replicate <- as.factor(yr2018$replicate)
+# add a DON per unit Fg biomass for year 2017
+yr2017$DONperFg <- yr2017$DON/yr2017$FgTa_TRI6toPR1
+
+# Calculate mean values per plot (only relevant to 2018)
+yr2018.melted <- melt(yr2018, id.vars = c("CO2", "plot", "day"), measure.vars = c("FgTa_Geomean", "DON"), na.rm = TRUE)
+yr2018.summarized <- ddply(yr2018.melted, .(CO2, plot, day, variable), summarise, averaged = mean(value, na.rm = TRUE))
+yr2018.means <- dcast(yr2018.summarized, CO2 + plot + day ~ variable)
+
+```
+
+
+## 2) Visualize
+
+### 2a) DON
+```{r, echo = FALSE, results = 'hide'}
+#expression(CO[2])
+
+# DON
+don17 <- ggplot(yr2017, aes(y = DON, x = CO2, group = CO2, color=CO2)) +
+    geom_boxplot(outlier.shape = NA) + 
+    geom_jitter(width = 0.1, height = 0, size = 2, alpha = 0.5) +
+    scale_y_continuous("DON (ppm)") +
+    scale_x_discrete(expression(CO[2])) +
+    guides(colour = 'none') +
+    scale_color_manual("", values = co2_color)
+don18 <- ggplot(yr2018) +
+    facet_wrap(~ CO2, nrow = 1) +
+    geom_boxplot(aes(y = DON, x = day, color=CO2), outlier.shape = NA) +
+    geom_jitter(aes(y = DON, x = day, color=CO2), width = 0.1, height = 0, size = 1.5, alpha = 0.5)+
+    scale_y_continuous("DON (ppm)") + 
+    scale_x_discrete("Days Post Infection") +
+    guides(colour = 'none') +
+    scale_color_manual("", values = co2_color)
+
+don17
+don18
+```
+
+### 2b) Fusarium Biomass
+```{r, echo = FALSE, results = 'hide'}
+# NOTE 2017 data normally distributed, but 2018 definitely not
+# can log transform both and have the 2017 data still look reasonably normal
+fg17 <- ggplot(yr2017, aes(y = FgTa_TRI6toPR1, x = CO2, group = CO2, color=CO2)) +
+    geom_boxplot(outlier.shape = NA) + 
+    geom_jitter(width = 0.1, height = 0, size = 2, alpha = 0.5) +
+    scale_y_continuous(expression(paste(italic("Fusarium")," load")), 
+                       trans = "log", breaks = c(2, 5, 10, 15)) +
+    scale_x_discrete(expression(CO[2])) +
+    guides(colour = 'none') +
+    scale_color_manual("", values = co2_color)
+fg18 <- ggplot(yr2018) +
+    facet_wrap(~ CO2, nrow = 1) +
+    geom_boxplot(aes(y = FgTa_Geomean, x = day, color=CO2), outlier.shape = NA) +
+    geom_jitter(aes(y = FgTa_Geomean, x = day, color=CO2), width = 0.1, height = 0, size = 1.5, alpha = 0.5) +
+    scale_y_continuous(expression(paste(italic("Fusarium")," load")), 
+                       trans = "log", breaks = c(.5, 2, 5, 10)) + 
+    scale_x_discrete("Days Post Infection") +
+    guides(colour = 'none') +
+    scale_color_manual("", values = co2_color)
+
+fg17
+fg18
+```
+
+```{r, include = FALSE}
+fg_all <- ggarrange(fg17, fg18, don17, don18, 
+          ncol = 2, nrow = 2,
+          widths = c(1,1.5), heights = c(1,1),
+          labels = c("A)", "B)", "C)", "D)"), 
+          label.args = list(gp=gpar(font=2, fontsize=16), 
+                            x=unit(1,"line"), vjust=1.5) )  #, hjust=-.5, 
+#tiff("./figures/DON & Fg by CO2.tiff", width=180, height=160, units="mm", res=600)
+fg_all
+#dev.off()
+#85mm width or 180mm width
+
+
+# #tiff("./figures/DON & Fg by CO2.tiff", width=7, height=7, units="in", res=600)
+# multiplot(fg17, fg18, don17, don18, cols = 2)
+# #dev.off()
+# #png("./figures/fg17.png", width = 6, height = 9, units = "cm", res = 1200)
+# fg17
+# #dev.off()
+# #png("./figures/fg18.png", width = 12, height = 9, units = "cm", res = 1200)
+# fg18
+# #dev.off()
+# #png("./figures/don17.png", width = 6, height = 9, units = "cm", res = 1200)
+# don17
+# #dev.off()
+# #png("./figures/don18.png", width = 12, height = 9, units = "cm", res = 1200)
+# don18
+# #dev.off()
+
+```
+
+
+## 3) Stats
+```{r, echo = FALSE, results = 'hide'}
+
+### 2017 design
+table(yr2017$CO2, yr2017$plot)
+# plot nested in CO2, though with 1 plot per treatment, plot is defunct in this year, 
+#   so really replicate nested in CO2
+
+### 2018 design
+table(yr2018$plot, yr2018$day, yr2018$CO2)
+# plot nested in CO2, repeated measures expt
+
+
+### normality
+hist(yr2017$DON)  #odd, but also few data points, may need to try boxcox for this one
+hist(sqrt(yr2018$DON)) #sqrt better than raw
+hist(yr2017$FgTa_TRI6toPR1)  #fine as is, log doesn't appear to hurt, could be cautious and try boxcox
+hist(log(yr2018$FgTa_Geomean))  # log clearly better
+
+```
+
+### 3a) DON
+```{r}
+## DON
+don17_mod <- lm(DON ~ CO2, data = yr2017)
+Anova(don17_mod, type = 3)
+summary(don17_mod)
+
+don18_mod <- lmer(sqrt(DON) ~ day * CO2 + (1|plot:CO2), data = yr2018)
+Anova(don18_mod, type = 3)
+# CO2 effect is not significant
+summary(don18_mod)
+
+```
+
+### 3a) Fusarium biomass
+```{r}
+fg17_mod <- lm(FgTa_TRI6toPR1 ~ CO2, data = yr2017)
+Anova(fg17_mod, type = 3)
+summary(fg17_mod)
+
+fg18_mod <- lmer(log(FgTa_Geomean) ~ day * CO2 + (1|plot:CO2), data = yr2018)
+#fg18_mod.a <- lmer(log(FgTa_Geomean) ~ day * CO2 + (1|plot), data = yr2018)
+
+Anova(fg18_mod, type = 3)
+#Anova(fg18_mod.a, type = 3)
+
+# CO2 effect is not significant
+summary(fg18_mod)
+#summary(fg18_mod.a)
+
+```
+
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+#### end

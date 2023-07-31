@@ -1,0 +1,1738 @@
+---
+title: "FACE Microbiome Data"
+output:
+    html_document:
+        toc: true
+        toc_depth: 3
+        toc_float: true
+author: "Briana K. Whitaker"
+date: "`r Sys.Date()`"
+---
+\fontsize{9}{10}
+---
+
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(
+                      warning=FALSE, message=FALSE)
+```
+
+
+* Run using `r version[['version.string']] `.
+
+# Objective
+This document reports on the differential abundance (DeSEQ2) analysis of Microbiome data (16S and ITS) from Glenn wheat samples grown in the same field as Fusarium-inoculated wheat heads, but for plants that themselves were not acutally inoculated (Years 2017 and 2018). 
+
+
+
+## Details
+Field experiment was conducted as part of SOY-FACE ambient and elevated CO2 experiments at UIUC. Fungal biomass was constructed in 2017 from a single gene of Fusarium and single gene of wheat, using Bio_Rad, and expressed as a ratio. Fungal biomass in 2018 was constructed from multiple genes using a Fluidigm, also expressed as a ratio. Microbiome data was processed using Illumina MiSeq and DADA2.
+
+
+# 0) Load Packages, functions, source scripts
+```{r, echo=FALSE, results='hide', include=FALSE} 
+x<-c("ggplot2", "dplyr", "lme4", "reshape2", "car", "dada2", "phyloseq", 
+     "vegan", "DESeq2", "RRPP", "RColorBrewer", "ShortRead", "egg",
+     "speedyseq", "grid")
+lapply(x, require, character.only = TRUE)
+
+#Load functions
+source("./code/multiplot.function.R")
+#add 'not in' function
+`%nin%` = Negate(`%in%`)
+
+# function for PCoA ellipses - 
+veganCovEllipse <- function (cov, center = c(0, 0), scale = 1, npoints = 100)   {
+  theta <- (0:npoints) * 2 * pi/npoints
+  Circle <- cbind(cos(theta), sin(theta))
+  t(center + scale * t(Circle %*% chol(cov)))    }
+
+# function for protected geometric means
+gm_mean_protected <- function(x) {
+  if (all(x == 0)) {
+    return (0)
+  }
+  exp(mean(log(x[x != 0])))
+}
+
+mean.rel.func <- function(SbySdata) {
+  site.reads <- apply(SbySdata, 1, sum)
+  MRA <- apply(SbySdata/site.reads, 2, mean)
+  return(MRA)
+}
+
+#set seed
+#runif(1, min = 0, max = 1000)
+set.seed(290)
+
+# set ggplot2 theme
+theme_set(theme_bw(base_size=14)) 
+theme_update(panel.grid.major=element_line(0), panel.grid.minor=element_line(0))
+
+require(RColorBrewer)
+display.brewer.pal(4, "Set1")
+brewer.pal(4, "Set1")
+co2_color <- c("#377EB8", "#E41A1C") 
+tissue_color <- c("#4DAF4A", "#984EA3") 
+display.brewer.pal(6, "BuPu")
+brewer.pal(6, "BuPu")
+collect_color <- c("#9EBCDA", "#8C96C6", "#8856A7", "#810F7C") 
+```
+
+
+# 1) Load data
+* Adjusted phyloseq objects (filtered and unfiltered) to make them compatible with DESeq2 pipeline.
+```{r, echo=FALSE, results='hide', include=FALSE} 
+# # perform some basic editing on the filtered ps objects
+# load("./data/FACE_phyloseq_bacteria.Y17.RData")
+# ps_17b <- bacteria.Y17.abund.ps
+# load("./data/FACE_phyloseq_bacteria.Y18.RData")
+# ps_18b <- bacteria.Y18.abund.ps
+# load("./data/FACE_phyloseq_fungi.Y17.RData")
+# ps_17f <- fungi.Y17.abund.ps
+# load("./data/FACE_phyloseq_fungi.Y18.RData")
+# ps_18f <- fungi.Y18.abund.ps
+# 
+# # perform some basic editing on the unfiltered ps objects
+# # NOTE -- easier to do editing steps with same object names as filtered, and just rename the loaded back in datasets
+# load("./data/FACE_unfiltered_b17.ps.RData")
+# ps_17b <- bacteria.Y17.samples.ps
+# load("./data/FACE_unfiltered_b18.ps.RData")
+# ps_18b <- bacteria.Y18.samples.ps
+# load("./data/FACE_unfiltered_f17.ps.RData")
+# ps_17f <- fungi.Y17.samples.ps
+# load("./data/FACE_unfiltered_f18.ps.RData")
+# ps_18f <- fungi.Y18.samples.ps
+# 
+# #yr2017 <- read.csv("./data/2017 FACE field data Biomass and DON.csv", stringsAsFactors = TRUE)
+# #yr2018 <- read.csv("./data/2018 Data Biomass and Toxin.csv", stringsAsFactors = TRUE)
+# 
+# require(speedyseq)
+# ps_17b <- ps_17b %>% rename_sample_data(Label.Bakker = ï..Label.Bakker )  #Windows encoded column name
+# ps_17f <- ps_17f %>% rename_sample_data(Label.Bakker = ï..Label.Bakker )
+# ps_18b <- ps_18b %>% rename_sample_data(Label.Bakker = ï..Label.Bakker )
+# ps_18f <- ps_18f %>% rename_sample_data(Label.Bakker = ï..Label.Bakker )
+# 
+# #convert relevant variables to factors
+# sample_data(ps_17b)$CO2 <- factor(sample_data(ps_17b)$CO2)
+# sample_data(ps_17b)$collect <- factor(sample_data(ps_17b)$collect)
+# sample_data(ps_17b)$tissue <- factor(sample_data(ps_17b)$tissue)
+# sample_data(ps_17b)$plot <- factor(sample_data(ps_17b)$plot)
+# sample_data(ps_17b)$plant <- factor(sample_data(ps_17b)$plant)
+# 
+# sample_data(ps_17f)$CO2 <- factor(sample_data(ps_17f)$CO2)
+# sample_data(ps_17f)$collect <- factor(sample_data(ps_17f)$collect)
+# sample_data(ps_17f)$tissue <- factor(sample_data(ps_17f)$tissue)
+# sample_data(ps_17f)$plot <- factor(sample_data(ps_17f)$plot)
+# sample_data(ps_17f)$plant <- factor(sample_data(ps_17f)$plant)
+# 
+# sample_data(ps_18b)$CO2 <- factor(sample_data(ps_18b)$CO2)
+# sample_data(ps_18b)$collect <- factor(sample_data(ps_18b)$collect)
+# sample_data(ps_18b)$tissue <- factor(sample_data(ps_18b)$tissue)
+# sample_data(ps_18b)$plot <- factor(sample_data(ps_18b)$plot)
+# sample_data(ps_18b)$plant <- factor(sample_data(ps_18b)$plant)
+# 
+# sample_data(ps_18f)$CO2 <- factor(sample_data(ps_18f)$CO2)
+# sample_data(ps_18f)$collect <- factor(sample_data(ps_18f)$collect)
+# sample_data(ps_18f)$tissue <- factor(sample_data(ps_18f)$tissue)
+# sample_data(ps_18f)$plot <- factor(sample_data(ps_18f)$plot)
+# sample_data(ps_18f)$plant <- factor(sample_data(ps_18f)$plant)
+# 
+# # add refseq object, and rename ASVs
+# ## NOTE - the ASV numbers will be discordant between the filtered and unfiltered, because the ASV names were not assigned first before the filtering.
+# dna_17b <- Biostrings::DNAStringSet(taxa_names(ps_17b))
+# names(dna_17b) <- taxa_names(ps_17b)
+# ps_17b <- merge_phyloseq(ps_17b, dna_17b)
+# taxa_names(ps_17b) <- paste0("ASV", seq(ntaxa(ps_17b)))
+# 
+# dna_17f <- Biostrings::DNAStringSet(taxa_names(ps_17f))
+# names(dna_17f) <- taxa_names(ps_17f)
+# ps_17f <- merge_phyloseq(ps_17f, dna_17f)
+# taxa_names(ps_17f) <- paste0("ASV", seq(ntaxa(ps_17f)))
+# 
+# dna_18b <- Biostrings::DNAStringSet(taxa_names(ps_18b))
+# names(dna_18b) <- taxa_names(ps_18b)
+# ps_18b <- merge_phyloseq(ps_18b, dna_18b)
+# taxa_names(ps_18b) <- paste0("ASV", seq(ntaxa(ps_18b)))
+# 
+# dna_18f <- Biostrings::DNAStringSet(taxa_names(ps_18f))
+# names(dna_18f) <- taxa_names(ps_18f)
+# ps_18f <- merge_phyloseq(ps_18f, dna_18f)
+# taxa_names(ps_18f) <- paste0("ASV", seq(ntaxa(ps_18f)))
+# 
+# # convert collect-ion dates to underscores, otherwise DESeq2 gives "warnings"
+# sample_data(ps_17b)$collect <- factor(sapply(sample_data(ps_17b)$collect, gsub, patt="-", replace="_"))
+# sample_data(ps_17f)$collect <- factor(sapply(sample_data(ps_17f)$collect, gsub, patt="-", replace="_"))
+# sample_data(ps_18b)$collect <- factor(sapply(sample_data(ps_18b)$collect, gsub, patt="-", replace="_"))
+# sample_data(ps_18f)$collect <- factor(sapply(sample_data(ps_18f)$collect, gsub, patt="-", replace="_"))
+# 
+# # for filtered datasets
+# save(ps_17b, file = "./data/FACE_phyloseq_bacteria.Y17-edit.RData")
+# save(ps_17f, file = "./data/FACE_phyloseq_fungi.Y17-edit.RData")
+# save(ps_18b, file = "./data/FACE_phyloseq_bacteria.Y18-edit.RData")
+# save(ps_18f, file = "./data/FACE_phyloseq_fungi.Y18-edit.RData")
+
+# # for unfiltered datasets
+# save(ps_17b, file = "./data/FACE_unfiltered_b17.ps-edit.RData")
+# save(ps_17f, file = "./data/FACE_unfiltered_f17.ps-edit.RData")
+# save(ps_18b, file = "./data/FACE_unfiltered_b18.ps-edit.RData")
+# save(ps_18f, file = "./data/FACE_unfiltered_f18.ps-edit.RData")
+
+
+# load in (unfiltered) ps objects
+load("./data/FACE_unfiltered_b17.ps-edit.RData")
+ps_17b -> ps_u_17b
+load("./data/FACE_unfiltered_f17.ps-edit.RData")
+ps_17f -> ps_u_17f
+load("./data/FACE_unfiltered_b18.ps-edit.RData")
+ps_18b -> ps_u_18b
+load("./data/FACE_unfiltered_f18.ps-edit.RData")
+ps_18f -> ps_u_18f
+
+ps_u_17b #133 samp, 552tax
+ps_u_17f # 100 samp, 165tax
+ps_u_18b #123 samp, 654tax
+ps_u_18f #128 samp, 1375tax
+
+# # load in renamed (filtered) ps objects
+load("./data/FACE_phyloseq_bacteria.Y17-edit.RData")
+load("./data/FACE_phyloseq_fungi.Y17-edit.RData")
+load("./data/FACE_phyloseq_bacteria.Y18-edit.RData")
+load("./data/FACE_phyloseq_fungi.Y18-edit.RData")
+
+ps_17b #133 samp, 73tax
+ps_17f #100 samp, 16tax
+ps_18b # 123 samp, 135tax
+ps_18f #128 samp, 180tax
+
+```
+
+### 1a) Experimental Design
+```{r, echo = FALSE, results = 'hide', fig.keep='none'}
+hist(rowSums(ps_17b@otu_table)) #ok
+hist(rowSums(ps_17f@otu_table)) #skewed
+hist(rowSums(ps_18b@otu_table)) #ok-ish
+hist(rowSums(ps_18f@otu_table)) #ok
+
+hist(log(colSums(ps_17b@otu_table))) #ok
+hist(log(colSums(ps_17f@otu_table))) #ok
+hist(log(colSums(ps_18b@otu_table))) #ok
+hist(log(colSums(ps_18f@otu_table))) #ok
+
+
+table(ps_18b@sam_data$tissue, ps_18b@sam_data$plot)
+
+
+table(ps_18b@sam_data$plot, ps_18b@sam_data$CO2) #plot nested in CO2 treatment
+table(ps_18b@sam_data$plot, ps_18b@sam_data$tissue)
+table(ps_18b@sam_data$plot, ps_18b@sam_data$collect)
+
+table(ps_18b@sam_data$plot, ps_18b@sam_data$plant)
+table(ps_18b@sam_data$tissue, ps_18b@sam_data$plant) #different nesting between years
+table(ps_18b@sam_data$collect, ps_18b@sam_data$plant) 
+
+table(ps_18b@sam_data$collect, ps_18b@sam_data$plant,  ps_18b@sam_data$tissue)
+
+```
+
+### 1b) Add nested plot_n
+```{r, echo = FALSE, results = 'hide'}
+
+# write out SbyE as dataframes from ps objects
+SbyE_17b <- data.frame(sample_data(ps_17b))
+SbyE_17f <- data.frame(sample_data(ps_17f))
+SbyE_18b <- data.frame(sample_data(ps_18b))
+SbyE_18f <- data.frame(sample_data(ps_18f))
+
+# manually add an "implicitly nested" column for plot (required for DESeq) = plot_n (only need to do once)
+
+#write.csv(SbyE_17b, "./intermediate/FACE_SbyE_17b.csv")
+SbyE_17b <- read.csv("./data/FACE_SbyE_17b_edit.csv", row.names=1, stringsAsFactors = TRUE)
+SbyE_17b$plot_n <- factor(SbyE_17b$plot_n)
+sample_data(ps_17b) <- SbyE_17b
+sample_data(ps_u_17b) <- SbyE_17b
+
+#write.csv(SbyE_17f, "./intermediate/FACE_SbyE_17f.csv")
+SbyE_17f <- read.csv("./data/FACE_SbyE_17f_edit.csv", row.names=1, stringsAsFactors = TRUE)
+SbyE_17f$plot_n <- factor(SbyE_17f$plot_n)
+sample_data(ps_17f) <- SbyE_17f
+sample_data(ps_u_17f) <- SbyE_17f
+
+#write.csv(SbyE_18b, "./intermediate/FACE_SbyE_18b.csv")
+SbyE_18b <- read.csv("./data/FACE_SbyE_18b_edit.csv", row.names=1, stringsAsFactors = TRUE)
+SbyE_18b$plot_n <- factor(SbyE_18b$plot_n)
+sample_data(ps_18b) <- SbyE_18b
+sample_data(ps_u_18b) <- SbyE_18b
+
+#write.csv(SbyE_18f, "./intermediate/FACE_SbyE_18f.csv")
+SbyE_18f <- read.csv("./data/FACE_SbyE_18f_edit.csv", row.names=1, stringsAsFactors = TRUE)
+SbyE_18f$plot_n <- factor(SbyE_18f$plot_n)
+sample_data(ps_18f) <- SbyE_18f
+sample_data(ps_u_18f) <- SbyE_18f
+
+#identical(sort(sample_data(ps_18f)$Label.Bakker),sort(sample_data(ps_u_18f)$Label.Bakker))
+
+```
+
+
+# 2) DESeq2 - Differential Abundance analysis
+* http://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#variations-to-the-standard-workflow
+* https://support.bioconductor.org/p/64480/
+* https://bioinformatics.stackexchange.com/questions/2375/is-it-possible-to-create-a-deseqdataset-with-a-user-provided-design-matrix
+* Create DESeq2 datasets for MAIN EFFECTS (no interaction terms)
+* See DESeq2 vignette for explanation of why including interaction terms alters interpretation of main effects (justification for doing 2 separate models: main effects only and interactions only)
+
+
+### 2a) DESeq base model
+* note - that the design matrix is only used in estimating dispersion & log2fold changes, but not sizeFactors
+* In this iteration, I used the unfiltered phyloseq object, estimated the size factors, then applied the SAME filtering as before (>5 reads in 10 samples), and then did the dispersion estimation and hypothesis testing on the filtered datasets. 
+* The idea was that having more taxa with which to estimate size Factors could help improve convergence errors later (which it did to a certain degree, though it did not completely remove the problem)
+* Here is an example for the 2017 bacteria data
+```{r, results = 'hide', fig.width =4, fig.height = 4}
+dds_17b <- phyloseq_to_deseq2(ps_u_17b, ~ 1)
+dds_17b_main <- DESeqDataSet(dds_17b, ~ CO2 + collect + tissue + CO2:plot_n)
+dds_17b_main <- estimateSizeFactors(dds_17b_main,
+              geoMeans = apply(counts(dds_17b_main), 1, gm_mean_protected))
+nc <- counts(dds_17b_main, normalized = FALSE)
+filter <- rowSums(nc >= 5) >= 10
+table(filter)
+dds_17b_main <- dds_17b_main[filter,]
+dds_17b_main <- DESeq(dds_17b_main, test="Wald", fitType="local") #embedded dispersion estimates
+plotDispEsts(dds_17b_main)
+# this filter method leaves 73 taxa, same as the 73 of the MB filtered dataset
+```
+
+```{r, echo = FALSE, results = 'hide', fig.keep = 'none'}
+# dds_17f <- phyloseq_to_deseq2(ps_u_17f, ~ 1)
+# dds_17f_main <- DESeqDataSet(dds_17f, ~ CO2 + collect + tissue + CO2:plot_n)
+# dds_17f_main <- estimateSizeFactors(dds_17f_main,
+#               geoMeans = apply(counts(dds_17f_main), 1, gm_mean_protected))
+# nc <- counts(dds_17f_main, normalized = FALSE)
+# filter <- rowSums(nc >= 5) >= 10
+# table(filter)
+# dds_17f_main <- dds_17f_main[filter,]
+# dds_17f_main <- DESeq(dds_17f_main, test="Wald", fitType="local")
+# plotDispEsts(dds_17f_main)
+# # this filter method leaves 16 tax, same as the 16 of the MB filtered dataset
+# 
+# dds_18b <- phyloseq_to_deseq2(ps_u_18b, ~ 1)
+# dds_18b_main <- DESeqDataSet(dds_18b, ~ CO2 + collect + tissue + CO2:plot_n)
+# dds_18b_main <- estimateSizeFactors(dds_18b_main,
+#               geoMeans = apply(counts(dds_18b_main), 1, gm_mean_protected))
+# nc <- counts(dds_18b_main, normalized = FALSE)
+# filter <- rowSums(nc >= 5) >= 10
+# table(filter)
+# dds_18b_main <- dds_18b_main[filter,]
+# dds_18b_main <- DESeq(dds_18b_main, test="Wald", fitType="local")
+# plotDispEsts(dds_18b_main)
+# # this filter method leaves 135 taxa, same as the 135 of the MB filtered dataset
+# # NOTE - I visually compared the plotDispEsts for the two workflows of 1) unfiltered sizeFactor estimation -> then filter -> then dispersion estimate vs. 2) the filtered sizeFactor estimation and dispersion estimation directly;  and there are minor differences in the estimation
+# 
+# dds_18f <- phyloseq_to_deseq2(ps_u_18f, ~ 1)
+# dds_18f_main <- DESeqDataSet(dds_18f, ~ CO2 + collect + tissue + CO2:plot_n)
+# dds_18f_main <- estimateSizeFactors(dds_18f_main,
+#               geoMeans = apply(counts(dds_18f_main), 1, gm_mean_protected))
+# nc <- counts(dds_18f_main, normalized = FALSE)
+# filter <- rowSums(nc >= 5) >= 10
+# table(filter)
+# dds_18f_main <- dds_18f_main[filter,]
+# dds_18f_main <- DESeq(dds_18f_main, test="Wald", fitType="local")
+# plotDispEsts(dds_18f_main)
+# # this filter method leaves 180 tax, same as the 180 of the MB filtered dataset
+# 
+# #dim(model.matrix(design(dds_17b_main), data = SbyE_17b)) #these are the correct model matrices for the main effects
+# #dim(model.matrix(design(dds_18b_main), data = SbyE_18b))
+
+```
+
+* Notes - for the 18f dataset alone, 2 rows did not converge
+# however, if we changed the filtering strategy to be based on normalized counts = TRUE, then all the rows would converge. Right now filtering strategy is based on unnormalized counts.
+
+### 2b) Likelihood-Ratio Tests of model terms
+* akin to ANOVA type results
+* does not test specific contrasts w/in factors
+* p-values and adjusted pvalues are LRT of all variables and all levels, the lfc is only for a single comparison
+* thus to get the lfc for all specific contrasts will have to do that separately with Wald tests (next section)
+* Here is an example for the 2017 bacteria data
+
+```{r, results = 'hide'}
+# # 17b
+# # to test CO2, have to remove plot (I think); but all other main effects, control for plot
+# nbinomLRT(dds_17b_main, reduced = ~ collect + tissue, maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'CO2', YrMB = '17b') -> lrt.asv
+# nbinomLRT(dds_17b_main, reduced = ~ CO2 + tissue + CO2:plot_n, maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'collect', YrMB = '17b') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# nbinomLRT(dds_17b_main, reduced = ~ CO2 + collect + CO2:plot_n, maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'tissue', YrMB = '17b') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# 
+```
+
+```{r, echo = FALSE, results = 'hide'}
+# # 17f
+# nbinomLRT(dds_17f_main, reduced = ~ collect + tissue, maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'CO2', YrMB = '17f') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# nbinomLRT(dds_17f_main, reduced = ~ CO2 + tissue + CO2:plot_n, maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'collect', YrMB = '17f') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# nbinomLRT(dds_17f_main, reduced = ~ CO2 + collect + CO2:plot_n, maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'tissue', YrMB = '17f') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# 
+# # 18b
+# nbinomLRT(dds_18b_main, reduced = ~ collect + tissue, maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'CO2', YrMB = '18b') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# nbinomLRT(dds_18b_main, reduced = ~ CO2 + tissue + CO2:plot_n, maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'collect', YrMB = '18b') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# nbinomLRT(dds_18b_main, reduced = ~ CO2 + collect + CO2:plot_n, maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'tissue', YrMB = '18b') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# 
+# # 18f
+# nbinomLRT(dds_18f_main, reduced = ~ collect + tissue, maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'CO2', YrMB = '18f') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# nbinomLRT(dds_18f_main, reduced = ~ CO2 + tissue + CO2:plot_n, maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'collect', YrMB = '18f') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# nbinomLRT(dds_18f_main, reduced = ~ CO2 + collect + CO2:plot_n, maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'tissue', YrMB = '18f') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+```
+
+* And similarly for the 2-way interactions
+* Here is an example for the 2017 bacteria data
+
+```{r, results = 'hide'}
+
+# ###############
+# 
+# ## LRT test of 2-way interactive effects
+# 
+# # 17b
+# nbinomLRT(dds_17b_main, full = ~ CO2 + collect + tissue + CO2:plot_n + CO2:collect,
+#           reduced = design(dds_17b_main), maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'CO2:collect', YrMB = '17b') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# nbinomLRT(dds_17b_main, full = ~ CO2 + collect + tissue + CO2:plot_n + CO2:tissue,
+#           reduced = design(dds_17b_main), maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'CO2:tissue', YrMB = '17b') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# nbinomLRT(dds_17b_main, full = ~ CO2 + collect + tissue + CO2:plot_n + collect:tissue,
+#           reduced = design(dds_17b_main), maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'collect:tissue', YrMB = '17b') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# 
+```
+
+```{r, echo = FALSE, results = 'hide'}
+# # 17f
+# nbinomLRT(dds_17f_main, full = ~ CO2 + collect + tissue + CO2:plot_n + CO2:collect,
+#           reduced = design(dds_17f_main), maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'CO2:collect', YrMB = '17f') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# nbinomLRT(dds_17f_main, full = ~ CO2 + collect + tissue + CO2:plot_n + CO2:tissue,
+#           reduced = design(dds_17f_main), maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'CO2:tissue', YrMB = '17f') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# nbinomLRT(dds_17f_main, full = ~ CO2 + collect + tissue + CO2:plot_n + collect:tissue,
+#           reduced = design(dds_17f_main), maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'collect:tissue', YrMB = '17f') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# 
+# # 18b
+# nbinomLRT(dds_18b_main, full = ~ CO2 + collect + tissue + CO2:plot_n + CO2:collect,
+#           reduced = design(dds_18b_main), maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'CO2:collect', YrMB = '18b') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# nbinomLRT(dds_18b_main, full = ~ CO2 + collect + tissue + CO2:plot_n + CO2:tissue,
+#           reduced = design(dds_18b_main), maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'CO2:tissue', YrMB = '18b') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# nbinomLRT(dds_18b_main, full = ~ CO2 + collect + tissue + CO2:plot_n + collect:tissue,
+#           reduced = design(dds_18b_main), maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'collect:tissue', YrMB = '18b') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# 
+# # 18f
+# nbinomLRT(dds_18f_main, full = ~ CO2 + collect + tissue + CO2:plot_n + CO2:collect,
+#           reduced = design(dds_18f_main), maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'CO2:collect', YrMB = '18f') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# nbinomLRT(dds_18f_main, full = ~ CO2 + collect + tissue + CO2:plot_n + CO2:tissue,
+#           reduced = design(dds_18f_main), maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'CO2:tissue', YrMB = '18f') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# nbinomLRT(dds_18f_main, full = ~ CO2 + collect + tissue + CO2:plot_n + collect:tissue,
+#           reduced = design(dds_18f_main), maxit = 1000) %>% results(alpha=0.05) %>%
+#   as.data.frame %>% mutate(ASV_ID = row.names(.), Term = 'collect:tissue', YrMB = '18f') %>%
+#   rbind(.,lrt.asv) -> lrt.asv
+# 
+# 
+# dim(lrt.asv)  #2424
+# test <- na.omit(lrt.asv[lrt.asv$padj <= 0.05 ,])  #& lrt.asv$log2FoldChange >= 2
+# dim(test) #405 significant (BH correction for FDR already used as default)
+# table(test$Term)
+# #           CO2    CO2:collect        collect collect:tissue         tissue 
+# #            69              5            119             44            184 
+# 
+# #write.csv(lrt.asv, "./tables/FACE_deseq_LRT.csv")
+
+lrt.asv <- read.csv("./tables/FACE_deseq_LRT.csv", row.names = 1, stringsAsFactors = TRUE)
+
+```
+
+* FDR method BH p-adjustment already applied to the LRT
+* also note that the log2FoldChange and log fold change Standard Error columns only present data for the default contrast within a variable (so for collect which has 3 or 4 levels, the default is between the first two levels). So with the LRT test, we are mostly interested in just the , but not the estimate
+* changed results output to alpha = 0.05, the significance cutoff used for optimizing the independent filtering (default is 0.1),
+
+### 2c) Wald Tests - log2 fold changes due to main effects
+* no convergence errors for main effects with unfiltered size factor estimation then filtering DESEQ object used as the starter
+```{r, echo = FALSE, results = 'hide'}
+# # for loops for MAIN EFFECT pairwise contrasts
+# l2fc <- data.frame("baseMean" = numeric(), "log2FoldChange" = numeric(),
+#                    "lfcSE" = numeric(), "stat" = numeric(), "pvalue"=numeric(),
+#                    "padj" = numeric(), "Taxon" = factor(), "Term" = factor(), "YrMB" = factor())
+```
+
+* Here is an example for the CO2 main effect
+```{r, results = 'hide'}
+# ## Get all pairwise 'CO2' contrasts for all Year-Bact/Fung combinations
+# CO2List <- c('Ambient','Elevated')
+# YrMBList <- c('17b','17f','18b','18f')
+# for (yrmb in YrMBList) {
+#   mydds <- get(paste0('dds_', yrmb, "_main"))
+#   for (j in 1:(length(CO2List)-1)) { # j = index of 1st genotype
+#     co21 <- CO2List[j]
+#       for (k in (j+1):length(CO2List)) { # k = index of 2nd genotype
+#         co22 <- CO2List[k]
+#         print(paste0(co21,".",co22)) # debugging line to make sure all pairwise comparisons are represented
+#         # get log2 fold change between this pair of X
+#         results(mydds, contrast = c('CO2', co21, co22), alpha = 0.05) %>%
+#           as.data.frame %>% mutate(Taxon = row.names(.), Term = 'CO2',
+#           Contrast = paste0(co21, '_', co22), CO2 = 'both', YrMB = yrmb) %>%
+#           rbind(.,l2fc) -> l2fc
+#       }
+#   }
+#   rm(mydds) # clean up
+# }
+# rm(co21, co22, yrmb, j, k) # clean up
+```
+
+```{r, echo = FALSE, results = 'hide'}
+# # have to split for loop separately for 17 and 18 year collect term
+# 
+# ## Get all pairwise 'tissue' contrasts for all Year-Bact/Fung combinations
+# collect17List <- c('2017_07_24', '2017_07_31', '2017_08_07')
+# collect18List <- c('2018_07_10', '2018_07_17', '2018_07_24', '2018_07_31')
+# YrMB17List <- c('17b','17f')
+# YrMB18List <- c('18b','18f')
+# for (yrmb in YrMB17List) {
+#   mydds <- get(paste0('dds_', yrmb, "_main"))
+#   for (j in 1:(length(collect17List)-1)) { # j = index of 1st genotype
+#     collect1 <- collect17List[j]
+#       for (k in (j+1):length(collect17List)) { # k = index of 2nd genotype
+#         collect2 <- collect17List[k]
+#         print(paste0(collect1,".",collect2)) # debugging line
+#         # get log2 fold change between this pair of X
+#         results(mydds, contrast = c('collect', collect1, collect2), alpha = 0.05) %>%
+#           as.data.frame %>% mutate(Taxon = row.names(.), Term = 'collect',
+#           Contrast = paste0(collect1, '_', collect2), CO2 = 'both', YrMB = yrmb) %>%
+#           rbind(.,l2fc) -> l2fc
+#       }
+#   }
+#   rm(mydds) # clean up
+# }
+# rm(collect1, collect2, yrmb, j, k) # clean up
+# 
+# for (yrmb in YrMB18List) {
+#   mydds <- get(paste0('dds_', yrmb, "_main"))
+#   for (j in 1:(length(collect18List)-1)) { # j = index of 1st genotype
+#     collect1 <- collect18List[j]
+#       for (k in (j+1):length(collect18List)) { # k = index of 2nd genotype
+#         collect2 <- collect18List[k]
+#         print(paste0(collect1,".",collect2)) # debugging line
+#         # get log2 fold change between this pair of X
+#         results(mydds, contrast = c('collect', collect1, collect2), alpha = 0.05) %>%
+#           as.data.frame %>% mutate(Taxon = row.names(.), Term = 'collect',
+#           Contrast = paste0(collect1, '_', collect2), CO2 = 'both', YrMB = yrmb) %>%
+#           rbind(.,l2fc) -> l2fc
+#       }
+#   }
+#   rm(mydds) # clean up
+# }
+# rm(collect1, collect2, yrmb, j, k) # clean up
+# 
+# 
+# ## Get all pairwise 'tissue' contrasts for all Year-Bact/Fung combinations
+# tissueList <- c('leaf', 'spike')
+# YrMBList <- c('17b','17f','18b','18f')
+# for (yrmb in YrMBList) {
+#   mydds <- get(paste0('dds_', yrmb, "_main"))
+#   for (j in 1:(length(tissueList)-1)) { # j = index of 1st genotype
+#     tissue1 <- tissueList[j]
+#       for (k in (j+1):length(tissueList)) { # k = index of 2nd genotype
+#         tissue2 <- tissueList[k]
+#         print(paste0(tissue1,".",tissue2)) # debugging line to make sure all pairwise comparisons are represented
+#         # get log2 fold change between this pair of X
+#         results(mydds, contrast = c('tissue', tissue1, tissue2), alpha = 0.05) %>%
+#           as.data.frame %>% mutate(Taxon = row.names(.), Term = 'tissue',
+#           Contrast = paste0(tissue1, '_', tissue2), CO2 = 'both', YrMB = yrmb) %>%
+#           rbind(.,l2fc) -> l2fc
+#       }
+#   }
+#   rm(mydds) # clean up
+# }
+# rm(tissue1, tissue2, yrmb, j, k) # clean up
+# 
+# 
+# 
+# dim(l2fc)  #2965
+# test <- na.omit(l2fc[l2fc$padj <= 0.05 ,])  #& l2fc$log2FoldChange >= 2
+# dim(test) #1028 significant (BH correction for FDR already used as default)
+# table(test$Term)
+# #    CO2 collect  tissue
+# #     61     725     242 
+# #write.csv(l2fc, "./tables/FACE_deseq_mainEffects_contrasts.csv")
+
+l2fc <- read.csv("./tables/FACE_deseq_mainEffects_contrasts.csv", 
+                 row.names = 1, stringsAsFactors = TRUE)
+```
+
+* changed results output to alpha 0.05, similar to LRT tests, according to the package instructions.
+* no convergence issues for main effects (which might make sense, original dds_main objects did size factor estimation based on the main effects only)
+
+
+
+### 2d) Wald tests - log2 fold changes due to 2-way interactions
+```{r, echo = FALSE, results = 'hide'}
+# # #debugging
+# # see Method of Moments section of this Rmd for full details on this model construction
+
+
+
+# rrpp_18b <- lm.rrpp(dist_18b ~ CO2 + collect + tissue + CO2:plot +
+#                     CO2:collect + CO2:tissue + collect:tissue +
+#                     CO2:collect:tissue + CO2:collect:plot + CO2:tissue:plot +
+#                     CO2:collect:tissue:plot,
+#                     iter = 999,
+#                     print.progress = TRUE, data = SbyE_18b, SS.type = "III")
+# # #model matrix of the RRPP model, as a way to see what columns represent what treatments
+# mm_rrpp_18b <- rrpp_18b$LM$X
+# mm_rrpp_18b_1 <- attr(mm_rrpp_18b, "assign")
+# mm_rrpp_18b_2 <- attr(mm_rrpp_18b, "contrasts")
+# mm_18b <-apply(rrpp_18b$LM$X, 2, round, digits = 0, simplify = TRUE) #123 rows for samples, 62 columns for matrix design
+# dim(mm_18b)
+# attr(mm_18b, "assign") <- mm_rrpp_18b_1
+# attr(mm_18b, "contrasts") <- mm_rrpp_18b_2
+# # 
+# # # colnames(mm_18b)
+# # # [1:2] #CO2
+# # # [3:5] #collect
+# # # [6] #tissue
+# # # [7:12] #plot(nested CO2)
+# # # [13:15] #CO2:collect
+# # # [16] #CO2:tissue
+# # # [17:19] #collect:tissue
+# # # [20:22] #CO2:collect:tissue
+# # # [23:40] #CO2:collect:plot
+# # # [41:46] #CO2:tissue:plot
+# # # [47:62] #CO2:collect:tissue:plot
+# 
+# 
+# 
+# # what I want to test '~ CO2 + collect + tissue + CO2:plot_n + CO2:tissue'
+# SbyE_18b$DxT <- factor(paste0(SbyE_18b$tissue, "_", SbyE_18b$CO2))
+# colSums(model.matrix(~DxT+collect+DxT:plot_n, data = SbyE_18b))
+# 
+# mm <- model.matrix(~DxT+collect+DxT:plot_n, data = SbyE_18b)
+# mm_order <- mm[order(rownames(mm)),]
+# mm_18b_order <- mm_18b[order(rownames(mm_18b)),]
+# 
+# head(mm_order[,c(1:4)])
+# head(mm_18b_order[,c(1:2,6,16)]) # not exactly synonymous, because they code different things as the baseline
+# 
+# head(mm_order[,c(8:19)])
+# head(mm_18b_order[,c(7:12,41:46)]) 
+# # I think I have no choice but to test this instead
+# # '~ CO2 + collect + tissue + CO2:plot_n + CO2:tissue:plot + CO2:tissue'
+# # which could essentially be considered like testing CO2:tissue interaction,
+# #  controlling for the main effect of plot (nested in CO2) AND the tissue:plot (nested in CO2) interaction 
+# # which is coded in DESeq as ~ DxT + collect + DxT:plot_n
+
+```
+```{r, echo = FALSE, results = 'hide'}
+# l2fc_int <- data.frame("baseMean" = numeric(), "log2FoldChange" = numeric(), 
+#                    "lfcSE" = numeric(), "stat" = numeric(), "pvalue"=numeric(), 
+#                    "padj" = numeric(), "Taxon" = factor(), "Term" = factor(), "YrMB" = factor())
+# 
+```
+
+* Here is an example for the CO2 x tissue interaction (DxT)
+
+```{r, results = 'hide'}
+# ############### 
+# #log2 fold changes: CO2 x tissue
+# CO2List <- c('Ambient','Elevated')
+# tissueList <- c('leaf', 'spike')
+# YrMBList <- c('17b','17f','18b','18f')
+# for (yrmb in YrMBList) {
+#   ## Make new DESeq2 objects to look at DxT while controlling for collect-ions
+#   print(yrmb)
+#   #my_ps <- get(paste0('ps_',yrmb))
+#   my_ps <- get(paste0('ps_u_',yrmb))
+#   my_ps_DxT <- phyloseq_to_deseq2(my_ps, ~1) # make DESeq2 obj from ps obj
+#   my_ps_DxT$DxT <- factor(paste0(my_ps_DxT$tissue, "_", my_ps_DxT$CO2)) # Make "grouping factor"
+#   design(my_ps_DxT) <- ~DxT+collect+DxT:plot_n # define design: interested in CO2 x tissue averaged over collections & plot_n
+#   my_ps_DxT <- estimateSizeFactors(my_ps_DxT, geoMeans = apply(counts(my_ps_DxT), 1, gm_mean_protected))
+#   ## only include this if using unfiltered dataset for estimateSizeFactors above
+#     nc <- counts(my_ps_DxT, normalized = FALSE)
+#     filter <- rowSums(nc >= 5) >= 10
+#     table(filter)
+#     my_ps_DxT <- my_ps_DxT[filter,]
+#   ## start here again
+#   my_ps_DxT<-DESeq(my_ps_DxT, test="Wald", fitType="local") # Store differential abundance analysis for this yrmb
+#   save(my_ps_DxT, file = paste0("./intermediate/foldchange/FACE_dds_", yrmb, "_DxT.RData")) # save to file
+#   ## Get all pairwise 'tissue' contrasts w/in each co2 level
+#   for (co2 in CO2List) { 
+#     for (j in 1:(length(tissueList)-1)) { # j = index of 1st tissue
+#       tissue1 <- paste0(tissueList[j], "_", co2)
+#       for (k in (j+1):length(tissueList)) { # k = index of 2nd tissue
+#         tissue2 <- paste0(tissueList[k], "_", co2)
+#         print(paste0(tissue1,".",tissue2)) # debugging line
+#         # get co2-specific log2 fold change between this pair of tissues at this co2
+#           results(my_ps_DxT, contrast = c('DxT', tissue1, tissue2), alpha = 0.05) %>% 
+#             as.data.frame %>% mutate(Taxon = row.names(.), Term = 'DxT', 
+#             Contrast = paste0(tissue1, '_', tissue2), CO2 = co2, YrMB = yrmb) %>%  
+#             rbind(., l2fc_int) -> l2fc_int
+#       }
+#     }
+#   }
+# }
+# rm(co2, yrmb, tissue1, tissue2, j, k, my_ps_DxT, my_ps)
+
+# # 17b(1), 17f(2), 18b(8), 18f(6)) :::: X rows did not converge in beta, labelled in mcols(object)$betaConv. Use larger maxit argument with nbinomWaldTest
+# # when the unfiltered dataset is used # 17b(2), 17f(0), 18b(7), 18f(7)) :::: X rows did not converge in beta, labelled in mcols(object)$betaConv. Use larger maxit argument with nbinomWaldTest
+```
+
+```{r, echo = FALSE, results = 'hide'}
+# ############### 
+# #log2 fold changes: CO2 x collect
+# CO2List <- c('Ambient','Elevated')
+# collect17List <- c('2017_07_24', '2017_07_31', '2017_08_07')
+# collect18List <- c('2018_07_10', '2018_07_17', '2018_07_24', '2018_07_31')
+# YrMB17List <- c('17b','17f')
+# YrMB18List <- c('18b','18f')
+# # Year 2017
+# for (yrmb in YrMB17List) {
+#   ## Make new DESeq2 objects to look at DxC while controlling for tissue
+#   print(yrmb)
+#   #my_ps <- get(paste0('ps_',yrmb))
+#   my_ps <- get(paste0('ps_u_',yrmb))
+#   my_ps_DxC <- phyloseq_to_deseq2(my_ps, ~1) # make DESeq2 obj from ps obj
+#   my_ps_DxC$DxC <- factor(paste0(my_ps_DxC$collect, "_", my_ps_DxC$CO2)) # Make "grouping factor"
+#   design(my_ps_DxC) <- ~DxC+tissue+DxC:plot_n # define design: interested in CO2 x collect averaged over tissues & plot_n
+#   my_ps_DxC <- estimateSizeFactors(my_ps_DxC, geoMeans = apply(counts(my_ps_DxC), 1, gm_mean_protected))
+#   ## only include this if using unfiltered dataset for estimateSizeFactors above
+#     nc <- counts(my_ps_DxC, normalized = FALSE)
+#     filter <- rowSums(nc >= 5) >= 10
+#     table(filter)
+#     my_ps_DxC <- my_ps_DxC[filter,]
+#   ## start here again
+#   my_ps_DxC<-DESeq(my_ps_DxC, test="Wald", fitType="local") # Store differential abundance analysis for this yrmb
+#   save(my_ps_DxC, file = paste0("./intermediate/foldchange/FACE_dds_", yrmb, "_DxC.RData")) # save to file
+#   ## Get all pairwise 'tissue' contrasts w/in each co2 level
+#   for (co2 in CO2List) { 
+#     for (j in 1:(length(collect17List)-1)) { # j = index of 1st tissue
+#       collect1 <- paste0(collect17List[j], "_", co2)
+#       for (k in (j+1):length(collect17List)) { # k = index of 2nd tissue
+#         collect2 <- paste0(collect17List[k], "_", co2)
+#         print(paste0(collect1,".",collect2)) # debugging line
+#         # get co2-specific log2 fold change between this pair of collections at this co2
+#           results(my_ps_DxC, contrast = c('DxC', collect1, collect2), alpha = 0.05) %>% 
+#             as.data.frame %>% mutate(Taxon = row.names(.), Term = 'DxC', 
+#             Contrast = paste0(collect1, '_', collect2), CO2 = co2, YrMB = yrmb) %>%  
+#             rbind(., l2fc_int) -> l2fc_int
+#       }
+#     }
+#   }
+# }
+# rm(co2, yrmb, collect1, collect2, j, k, my_ps_DxC, my_ps)
+# # 17b(3), 17f(1) :::: X rows did not converge in beta, labelled in mcols(object)$betaConv. Use larger maxit argument with nbinomWaldTest
+# # when the unfiltered dataset is used # 17b(5), 17f(0) :::: X rows did not converge in beta, labelled in mcols(object)$betaConv. Use larger maxit argument with nbinomWaldTest
+# 
+# 
+# # Year 2018
+# for (yrmb in YrMB18List) {
+#   ## Make new DESeq2 objects to look at DxC while controlling for tissue
+#   print(yrmb)
+#   #my_ps <- get(paste0('ps_',yrmb))
+#   my_ps <- get(paste0('ps_u_',yrmb))
+#   my_ps_DxC <- phyloseq_to_deseq2(my_ps, ~1) # make DESeq2 obj from ps obj
+#   my_ps_DxC$DxC <- factor(paste0(my_ps_DxC$collect, "_", my_ps_DxC$CO2)) # Make "grouping factor"
+#   design(my_ps_DxC) <- ~DxC+tissue+DxC:plot_n # define design: interested in CO2 x collect averaged over tissues & plot_n
+#   my_ps_DxC <- estimateSizeFactors(my_ps_DxC, geoMeans = apply(counts(my_ps_DxC), 1, gm_mean_protected))
+#   ## only include this if using unfiltered dataset for estimateSizeFactors above
+#     nc <- counts(my_ps_DxC, normalized = FALSE)
+#     filter <- rowSums(nc >= 5) >= 10
+#     table(filter)
+#     my_ps_DxC <- my_ps_DxC[filter,]
+#   ## start here again
+#   my_ps_DxC<-DESeq(my_ps_DxC, test="Wald", fitType="local") # Store differential abundance analysis for this yrmb
+#   save(my_ps_DxC, file = paste0("./intermediate/foldchange/FACE_dds_", yrmb, "_DxC.RData")) # save to file
+#   ## Get all pairwise 'tissue' contrasts w/in each co2 level
+#   for (co2 in CO2List) { 
+#     for (j in 1:(length(collect18List)-1)) { # j = index of 1st tissue
+#       collect1 <- paste0(collect18List[j], "_", co2)
+#       for (k in (j+1):length(collect18List)) { # k = index of 2nd tissue
+#         collect2 <- paste0(collect18List[k], "_", co2)
+#         print(paste0(collect1,".",collect2)) # debugging line
+#         # get co2-specific log2 fold change between this pair of collections at this co2
+#           results(my_ps_DxC, contrast = c('DxC', collect1, collect2), alpha = 0.05) %>% 
+#             as.data.frame %>% mutate(Taxon = row.names(.), Term = 'DxC', 
+#             Contrast = paste0(collect1, '_', collect2), CO2 = co2, YrMB = yrmb) %>%  
+#             rbind(., l2fc_int) -> l2fc_int
+#       }
+#     }
+#   }
+# }
+# rm(co2, yrmb, collect1, collect2, j, k, my_ps_DxC, my_ps)
+# # 18b(7), 18f(5) :::: X rows did not converge in beta, labelled in mcols(object)$betaConv. Use larger maxit argument with nbinomWaldTest
+# # when the unfiltered dataset is used # 18b(11), 18f(8) :::: X rows did not converge in beta, labelled in mcols(object)$betaConv. Use larger maxit argument with nbinomWaldTest
+# 
+# 
+# 
+# ############### 
+# #log2 fold changes: collect x tissue
+# tissueList <- c('leaf', 'spike')
+# collect17List <- c('2017_07_24', '2017_07_31', '2017_08_07')
+# collect18List <- c('2018_07_10', '2018_07_17', '2018_07_24', '2018_07_31')
+# YrMB17List <- c('17b','17f')
+# YrMB18List <- c('18b','18f')
+# # Year 2017
+# for (yrmb in YrMB17List) {
+#   ## Make new DESeq2 objects to look at DxT while controlling for collect-ions
+#   print(yrmb)
+#   #my_ps <- get(paste0('ps_',yrmb))
+#   my_ps <- get(paste0('ps_u_',yrmb))
+#   my_ps_CxT <- phyloseq_to_deseq2(my_ps, ~1) # make DESeq2 obj from ps obj
+#   my_ps_CxT$CxT <- factor(paste0(my_ps_CxT$collect, "_", my_ps_CxT$tissue)) # Make "grouping factor"
+#   design(my_ps_CxT) <- ~ CxT + CO2 + CO2:plot_n # define design: interested in collect x tissue averaged over CO2 & plot_n[nested]
+#   my_ps_CxT <- estimateSizeFactors(my_ps_CxT, geoMeans = apply(counts(my_ps_CxT), 1, gm_mean_protected))
+#   ## only include this if using unfiltered dataset for estimateSizeFactors above
+#     nc <- counts(my_ps_CxT, normalized = FALSE)
+#     filter <- rowSums(nc >= 5) >= 10
+#     table(filter)
+#     my_ps_CxT <- my_ps_CxT[filter,]
+#   ## start here again
+#   my_ps_CxT<-DESeq(my_ps_CxT, test="Wald", fitType="local") # Store differential abundance analysis for this yrmb
+#   #save(my_ps_CxT, file = paste0("./intermediate/foldchange/FACE_dds_", yrmb, "_CxT.RData")) # save to file
+#   ## Get all pairwise 'tissue' contrasts w/in each tissue level
+#   for (tissue in tissueList) { 
+#     for (j in 1:(length(collect17List)-1)) { # j = index of 1st tissue
+#       collect1 <- paste0(collect17List[j], "_", tissue)
+#       for (k in (j+1):length(collect17List)) { # k = index of 2nd tissue
+#         collect2 <- paste0(collect17List[k], "_", tissue)
+#         print(paste0(collect1,".",collect2)) # debugging line
+#         # get tissue-specific log2 fold change between this pair of tissues at this tissue
+#           results(my_ps_CxT, contrast = c('CxT', collect1, collect2), alpha = 0.05) %>% 
+#             as.data.frame %>% mutate(Taxon = row.names(.), Term = 'CxT', 
+#             Contrast = paste0(collect1, '_', collect2), CO2 = 'both', YrMB = yrmb) %>%  
+#             rbind(., l2fc_int) -> l2fc_int
+#       }
+#     }
+#   }
+# }
+# rm(tissue, yrmb, collect1, collect2, j, k, my_ps_CxT, my_ps)
+# # no convergence issues
+# # when the unfiltered dataset is used # no convergence issues
+# 
+# # Year 2018
+# for (yrmb in YrMB18List) {
+#   ## Make new DESeq2 objects to look at DxT while controlling for collect-ions
+#   print(yrmb)
+#   #my_ps <- get(paste0('ps_',yrmb))
+#   my_ps <- get(paste0('ps_u_',yrmb))
+#   my_ps_CxT <- phyloseq_to_deseq2(my_ps, ~1) # make DESeq2 obj from ps obj
+#   my_ps_CxT$CxT <- factor(paste0(my_ps_CxT$collect, "_", my_ps_CxT$tissue)) # Make "grouping factor"
+#   design(my_ps_CxT) <- ~ CxT + CO2 + CO2:plot_n # define design: interested in collect x tissue averaged over CO2 & plot_n[nested]
+#   my_ps_CxT <- estimateSizeFactors(my_ps_CxT, geoMeans = apply(counts(my_ps_CxT), 1, gm_mean_protected))
+#   ## only include this if using unfiltered dataset for estimateSizeFactors above
+#     nc <- counts(my_ps_CxT, normalized = FALSE)
+#     filter <- rowSums(nc >= 5) >= 10
+#     table(filter)
+#     my_ps_CxT <- my_ps_CxT[filter,]
+#   ## start here again
+#   my_ps_CxT<-DESeq(my_ps_CxT, test="Wald", fitType="local") # Store differential abundance analysis for this yrmb
+#   #save(my_ps_CxT, file = paste0("./intermediate/foldchange/FACE_dds_", yrmb, "_CxT.RData")) # save to file
+#   ## Get all pairwise 'tissue' contrasts w/in each tissue level
+#   for (tissue in tissueList) { 
+#     for (j in 1:(length(collect18List)-1)) { # j = index of 1st tissue
+#       collect1 <- paste0(collect18List[j], "_", tissue)
+#       for (k in (j+1):length(collect18List)) { # k = index of 2nd tissue
+#         collect2 <- paste0(collect18List[k], "_", tissue)
+#         print(paste0(collect1,".",collect2)) # debugging line
+#         # get tissue-specific log2 fold change between this pair of tissues at this tissue
+#           results(my_ps_CxT, contrast = c('CxT', collect1, collect2), alpha = 0.05) %>% 
+#             as.data.frame %>% mutate(Taxon = row.names(.), Term = 'CxT', 
+#             Contrast = paste0(collect1, '_', collect2), CO2 = 'both', YrMB = yrmb) %>%  
+#             rbind(., l2fc_int) -> l2fc_int
+#       }
+#     }
+#   }
+# }
+# rm(tissue, yrmb, collect1, collect2, j, k, my_ps_CxT, my_ps)
+# # 18b(8), 18f(6) :::: X rows did not converge in beta, labelled in mcols(object)$betaConv. Use larger maxit argument with nbinomWaldTest
+# # when the unfiltered dataset is used # 18b(5), 18f(7) :::: X rows did not converge in beta, labelled in mcols(object)$betaConv. Use larger maxit argument with nbinomWaldTest
+# 
+# 
+# #View(l2fc_int)
+# dim(l2fc_int) #9436
+# l2fc_int_signif <- l2fc_int[l2fc_int$padj <= 0.05,]
+# dim(l2fc_int_signif)  #3120 (much reduced with use of results(alpha = 0.05))
+# #table(l2fc_int_signif$Contrast)
+# 
+# #write.csv(l2fc_int, "./tables/FACE_deseq_2wayInteractions_contrasts.csv")
+l2fc_int <- read.csv("./tables/FACE_deseq_2wayInteractions_contrasts.csv", 
+                     row.names = 1, stringsAsFactors = TRUE)
+
+
+```
+
+
+### 2e) Apply additional p-adjustment to Wald tests
+```{r, echo = FALSE, results = 'hide'}
+rownames(l2fc) <- seq(1, dim(l2fc)[1])
+rownames(l2fc_int) <- seq(1, dim(l2fc_int)[1])
+dim(l2fc); dim(l2fc_int)
+l2fc_all <- rbind(l2fc, l2fc_int)
+dim(l2fc_all)  #12401
+
+
+l2fc_all %>% filter(padj < 0.05) %>% arrange(YrMB) -> test_signif  
+dim(l2fc_all)
+dim(test_signif)#with no additional adjustments, 3082 significant or 24.9% of all tests are signif
+```
+
+* For each ASV, there is a p-value for each contrast between each pair of Main effects 
+* the P-value for each of these contrasts has already been corrected for multiple comparisons (i.e., 1 test for each ASV)
+* To get the "effect-level" p-values, adjust again for multiple comparisons within each Term (i.e., 1 test for each pairwise group contrast within each Term)
+* This correction asks whether all of the log2 fold changes between group pairs are simultaneously nonzero
+* For example, the 'collect' term has potentially 3 (2017 data) or 6 (2018 data) total #s of comparisons for each week-week comparison, so we need to correct for those 3 or 6 #s of independent hypotheses.
+* If you look at which results get dropped with this additional adjustment (3082 to 2608, or 474 dropped results), they are only from the terms: collect, CxT (collect by tissue), DxC (CO2 by collect), and DxT (CO2 by tissue)
+
+```{r, echo = FALSE, results = 'hide'}
+####### Adjust p-values again for multiple comparisons #######
+group_by(l2fc_all, Taxon, Term, YrMB) %>% mutate(padjadj = p.adjust(padj, method='BH')) %>%
+  ungroup %>% as.data.frame -> l2fc_all
+
+table(l2fc_all$padj < 0.05)  #3082
+table(l2fc_all$padjadj < 0.05)  #2608   # so drops 474 significant ASVs, leaving 21.0% of all tests being signif
+
+# write out file of all contrasts with adjusted p-values for multple comparisons within terms
+#write.csv(l2fc_all, "./tables/FACE_deseq_all_contrasts_p-adjusted.csv")
+l2fc_all <- read.csv("./tables/FACE_deseq_all_contrasts_p-adjusted.csv", 
+                     row.names = 1, stringsAsFactors = TRUE)
+
+# l2fc_all %>% filter(padj < 0.05) -> test
+# dim(test) #3082
+# test %>% filter(padjadj >= 0.05) -> test2
+# test2 <- droplevels(test2)
+# dim(test2) #474
+# test2$Term
+# #Levels: collect CxT DxC DxT  
+```
+
+# 3) Diving into Deseq2 results
+* look only at significant results for figures
+* 2608 significant results across all main effect and 2-way interactions
+
+
+### 3a) organize
+```{r, echo = FALSE, results = 'hide'}
+
+## dataset to only look at significant outcomes
+l2fc_all %>% filter(padjadj < 0.05) -> l2fc_all_signif
+
+#reorder terms
+l2fc_all_signif$Term <- factor(l2fc_all_signif$Term, 
+    levels = c("CO2", "collect", "tissue", "DxC", "DxT", "CxT"))
+
+```
+
+```{r, echo = FALSE, results = 'hide'}
+## datasets to look at all main and 2-way effects (signif or not)
+# Set a boolean column for significance
+l2fc_all$significant <- as.factor(ifelse(l2fc_all$padjadj < .05, "Significant", NA))
+
+# add a unique ASV column that combines YrMB and taxon info
+l2fc_all$ASV <- paste(l2fc_all$YrMB, l2fc_all$Taxon, sep = "_")
+
+
+## set a column for phylum or class, to color results by
+# first make taxa tables dataframes, and add unique ASV column
+tax_17b <- data.frame(ps_u_17b@tax_table)
+tax_17b$ASV <- paste('17b', rownames(tax_17b), sep = "_")
+tax_17f <- data.frame(ps_u_17f@tax_table)
+tax_17f$ASV <- paste('17f', rownames(tax_17f), sep = "_")
+tax_18b <- data.frame(ps_u_18b@tax_table)
+tax_18b$ASV <- paste('18b', rownames(tax_18b), sep = "_")
+tax_18f <- data.frame(ps_u_18f@tax_table)
+tax_18f$ASV <- paste('18f', rownames(tax_18f), sep = "_")
+
+#combine taxa tables
+tax_all <- bind_rows(tax_17b, tax_17f, tax_18b, tax_18f)
+rownames(tax_all) <- tax_all$ASV
+
+# merge with l2fc results
+l2fc_all <- left_join(l2fc_all, tax_all, by = c("ASV"))
+
+
+
+
+## use case_when to create new column on two criteria, 
+# output Phylum for bact, class for fung
+l2fc_all %>% mutate(BPhyFClass = case_when(
+  YrMB == '17b' & significant == 'Significant' ~ ifelse(is.na(Phylum), "Unk. Bacteria", Phylum),
+  YrMB == '17f' & significant == 'Significant' ~ ifelse(is.na(Class), "Unk. Fungi", Class),
+  YrMB == '18b' & significant == 'Significant' ~ ifelse(is.na(Phylum), "Unk. Bacteria", Phylum),
+  YrMB == '18f' & significant == 'Significant' ~ ifelse(is.na(Class), "Unk. Fungi", Class)
+)) -> l2fc_all
+# sanity check
+l2fc_all["29",c("ASV","significant", "BPhyFClass")]  # I know 18f_ASV30 has no classification past Kingdom
+l2fc_all$BPhyFClass <- as.factor(l2fc_all$BPhyFClass)
+
+l2fc_all$BPhyFClass <- factor(l2fc_all$BPhyFClass, levels = c(
+  "Actinobacteriota", "Bacteroidota", "Firmicutes", "Proteobacteria", "Unk. Bacteria",
+  "c__Classiculomycetes", "c__Cystobasidiomycetes", "c__Dothideomycetes", "c__Eurotiomycetes", 
+  "c__Exobasidiomycetes", "c__Leotiomycetes", "c__Microbotryomycetes", "c__Sordariomycetes", 
+  "c__Tremellomycetes", "c__Ustilaginomycetes",  "Unk. Fungi"))
+
+
+
+## use case_when to create new column on two criteria, 
+# output Phylum for bact, PHYLUM for fungi
+l2fc_all %>% mutate(BPhyFPhy = case_when(
+  YrMB == '17b' & significant == 'Significant' ~ ifelse(is.na(Phylum), "Unk. Bacteria", Phylum),
+  YrMB == '17f' & significant == 'Significant' ~ ifelse(is.na(Phylum), "Unk. Fungi", Phylum),
+  YrMB == '18b' & significant == 'Significant' ~ ifelse(is.na(Phylum), "Unk. Bacteria", Phylum),
+  YrMB == '18f' & significant == 'Significant' ~ ifelse(is.na(Phylum), "Unk. Fungi", Phylum)
+)) -> l2fc_all
+# sanity check
+l2fc_all["29",c("ASV","significant", "BPhyFPhy")]  # I know 18f_ASV30 has no classification past Kingdom
+l2fc_all$BPhyFPhy <- as.factor(l2fc_all$BPhyFPhy)
+
+
+l2fc_all$BPhyFPhy <- factor(l2fc_all$BPhyFPhy, levels = c(
+  "Actinobacteriota", "Bacteroidota", "Firmicutes", "Proteobacteria", "Unk. Bacteria",
+  "p__Ascomycota", "p__Basidiomycota",  "Unk. Fungi"))
+levels(l2fc_all$BPhyFPhy)[6] <- "Ascomycota"
+levels(l2fc_all$BPhyFPhy)[7] <- "Basidiomycota"
+
+l2fc_all$BPhyFPhy <- droplevels(l2fc_all$BPhyFPhy)
+
+```
+
+
+
+
+
+
+```{r, echo = FALSE, results = 'hide'}
+# break up into main and 2-way effects again
+l2fc_all_main <- droplevels(l2fc_all[l2fc_all$Term == 'CO2' | l2fc_all$Term == 'collect' | l2fc_all$Term == 'tissue',])
+l2fc_all_2way <- droplevels(l2fc_all[l2fc_all$Term == 'DxC' | l2fc_all$Term == 'DxT' | l2fc_all$Term == 'CxT',])
+l2fc_all_2way$Term <- factor(l2fc_all_2way$Term, levels = c('DxC', 'DxT', 'CxT'))
+
+#subset DxC term for more fine depth study
+l2fc_DxC <- droplevels(l2fc_all[l2fc_all$Term == 'DxC' ,])
+
+l2fc_DxC_17 <- droplevels(l2fc_DxC[l2fc_DxC$YrMB == "17b" | l2fc_DxC$YrMB == "17f",])
+l2fc_DxC_18 <- droplevels(l2fc_DxC[l2fc_DxC$YrMB == "18b" | l2fc_DxC$YrMB == "18f",])
+
+levels(l2fc_DxC_17$Contrast)
+l2fc_DxC_17$Contrast <- factor(l2fc_DxC_17$Contrast,
+      levels = c("2017_07_24_Ambient_2017_07_31_Ambient", "2017_07_24_Ambient_2017_08_07_Ambient", 
+                    "2017_07_31_Ambient_2017_08_07_Ambient",
+                 "2017_07_24_Elevated_2017_07_31_Elevated", "2017_07_24_Elevated_2017_08_07_Elevated",
+                    "2017_07_31_Elevated_2017_08_07_Elevated") )
+l2fc_DxC_17$Contrast <- recode_factor(l2fc_DxC_17$Contrast, 
+       '2017_07_24_Ambient_2017_07_31_Ambient' = "Amb[Wk1-Wk2]",
+       '2017_07_24_Ambient_2017_08_07_Ambient' = "Amb[Wk1-Wk3]", 
+       '2017_07_31_Ambient_2017_08_07_Ambient' = "Amb[Wk2-Wk3]",
+       '2017_07_24_Elevated_2017_07_31_Elevated' = "Elev[Wk1-Wk2]", 
+       '2017_07_24_Elevated_2017_08_07_Elevated' = "Elev[Wk1-Wk3]",
+       '2017_07_31_Elevated_2017_08_07_Elevated' = "Elev[Wk2-Wk3]")
+
+levels(l2fc_DxC_18$Contrast)
+l2fc_DxC_18$Contrast <- factor(l2fc_DxC_18$Contrast,
+      levels = c("2018_07_10_Ambient_2018_07_17_Ambient",
+                 "2018_07_10_Ambient_2018_07_24_Ambient",
+                 "2018_07_10_Ambient_2018_07_31_Ambient",
+                 "2018_07_17_Ambient_2018_07_24_Ambient",
+                 "2018_07_17_Ambient_2018_07_31_Ambient",
+                 "2018_07_24_Ambient_2018_07_31_Ambient",
+                 "2018_07_10_Elevated_2018_07_17_Elevated",
+                 "2018_07_10_Elevated_2018_07_24_Elevated",
+                 "2018_07_10_Elevated_2018_07_31_Elevated",
+                 "2018_07_17_Elevated_2018_07_24_Elevated",
+                 "2018_07_17_Elevated_2018_07_31_Elevated",
+                 "2018_07_24_Elevated_2018_07_31_Elevated") )
+
+l2fc_DxC_18$Contrast <- recode_factor(l2fc_DxC_18$Contrast,
+                 "2018_07_10_Ambient_2018_07_17_Ambient" = "Amb[Wk1-Wk2]",
+                 "2018_07_10_Ambient_2018_07_24_Ambient" = "Amb[Wk1-Wk3]",
+                 "2018_07_10_Ambient_2018_07_31_Ambient" = "Amb[Wk1-Wk4]",
+                 "2018_07_17_Ambient_2018_07_24_Ambient" = "Amb[Wk2-Wk3]",
+                 "2018_07_17_Ambient_2018_07_31_Ambient" = "Amb[Wk2-Wk4]",
+                 "2018_07_24_Ambient_2018_07_31_Ambient" = "Amb[Wk3-Wk4]",
+                 "2018_07_10_Elevated_2018_07_17_Elevated" = "Elev[Wk1-Wk2]",
+                 "2018_07_10_Elevated_2018_07_24_Elevated" = "Elev[Wk1-Wk3]",
+                 "2018_07_10_Elevated_2018_07_31_Elevated" = "Elev[Wk1-Wk4]",
+                 "2018_07_17_Elevated_2018_07_24_Elevated" = "Elev[Wk2-Wk3]",
+                 "2018_07_17_Elevated_2018_07_31_Elevated" = "Elev[Wk2-Wk4]",
+                 "2018_07_24_Elevated_2018_07_31_Elevated" = "Elev[Wk3-Wk4]" )
+
+```
+
+
+
+#### notes for MS
+```{r}
+
+## total numbers of significantyly responding taxa
+l2fc_all %>% filter(padjadj < 0.05) -> l2fc_all_signif2
+dim(l2fc_all_signif2)
+
+sort(table(l2fc_all_signif2$Term), decreasing = TRUE)
+table(l2fc_all_signif2$Term, l2fc_all_signif2$YrMB)
+
+length(unique(l2fc_all_signif2$ASV))  #344 significant ASVs out of 404 (73+16+135+180) total tested
+
+
+```
+
+
+```{r}
+# median fold change, use abs() for magnitude not direction
+# use (2^) to back-transform from log2fold changes to just fold change
+# only look at significant enrichments/depletions
+l2fc_all_signif %>% 
+  group_by(YrMB, Term) %>% 
+  summarize(medianFC = 2^median(abs(log2FoldChange), na.rm = TRUE)) %>% 
+  ungroup %>% as.data.frame -> medianFCs
+
+medianFCs$medianFC <- round(medianFCs$medianFC,2)  # this is just the fold change
+medianFCs
+
+
+# median log2 fold change (no back transform)
+l2fc_all_signif %>% 
+  group_by(YrMB, Term) %>% 
+  summarize(medianFC = median(abs(log2FoldChange), na.rm = TRUE)) %>% 
+  ungroup %>% as.data.frame -> medianlogFCs
+
+medianlogFCs # this is the log2 fold change
+
+
+###############
+
+l2fc_all_signif %>% 
+  group_by(Term) %>% 
+  summarize(medianFC = 2^median(abs(log2FoldChange), na.rm = TRUE)) %>% 
+  ungroup %>% as.data.frame -> medianFCs_all
+medianFCs_all  # this is the fold change (back-transformd)
+
+l2fc_all_signif %>% 
+  group_by(Term) %>% 
+  summarize(medianFC = median(abs(log2FoldChange), na.rm = TRUE)) %>% 
+  ungroup %>% as.data.frame -> medianlogFCs_all
+medianlogFCs_all  # this is the log2 fold change
+
+###########
+
+
+### by taxonomy
+l2fc_all %>%
+    filter(padjadj < 0.05) %>%
+    group_by(Term, BPhyFPhy) %>%
+    summarize(medianFC = 2^median(abs(log2FoldChange), na.rm = TRUE)) %>% 
+    ungroup %>% as.data.frame -> medianFC_by_group
+medianFC_by_group$medianFC <- round(medianFC_by_group$medianFC, 2)
+medianFC_by_group    # this is the fold change
+
+l2fc_all %>%
+    filter(padjadj < 0.05) %>%
+    group_by(Term, BPhyFPhy) %>%
+    summarize(medianFC = median(abs(log2FoldChange), na.rm = TRUE)) %>% 
+    ungroup %>% as.data.frame -> medianlogFC_by_group
+medianlogFC_by_group    # this is the log2 fold change
+
+table(l2fc_all_signif2$YrMB, l2fc_all_signif2$BPhyFPhy, l2fc_all_signif2$Term)
+
+```
+
+### 3b) Figures
+```{r, echo = FALSE, results = 'hide', fig.keep = 'none'}
+# MA plot (example)
+ggplot(l2fc_all[l2fc_all$Term == "CO2" & l2fc_all$YrMB == "18f",], 
+       aes(x = baseMean, y = log2FoldChange, colour = significant)) + 
+  geom_point(size=1) + 
+  scale_y_continuous("Log2 Fold Change") +   #limits=c(-3, 3) #, oob=squish
+  scale_x_log10()+
+  labs(x = "Mean of Normalized Counts") + 
+  geom_hline(yintercept = 0, colour="tomato1", size=1, linetype = 2) + 
+  scale_colour_manual(name="q-value", values=c("Significant"="red", "NS"= "grey60")) + 
+  theme_bw()
+```
+
+### Effects - colored by Phylum 
+```{r, echo = FALSE, results = 'hide', fig.width = 8}
+taxa_col <- c("#377EB8", "#1B9E77", "#D95F02", "#7570B3", "black",
+  "#E7298A", "#66A61E", "black")
+
+# DA_main <- ggplot(l2fc_all_main, 
+#        aes(x = YrMB, y = log2FoldChange, colour = BPhyFPhy, size = significant)) + 
+#   facet_grid(.~Term) +
+#   geom_hline(yintercept = 0, colour="grey30", size=1, linetype = 2) +
+#   geom_jitter( width = .3, height = 0) +  #size = 1.5,
+#   scale_y_continuous( expression(paste("Log"[2]," Fold Change")) ) +
+#   scale_x_discrete("Year and Microbial Domain") +
+#   scale_colour_manual("Phylum", values=taxa_col, na.value= "grey60") +
+#   scale_size_manual(values=("Significant"=3), na.value= 0.8) +
+#   guides(size = 'none')
+# 
+# #tiff("./figures/DA_main-byPhylum.tiff", width=8, height=5, units="in", res=600)
+# DA_main
+# #dev.off()
+
+# DA_2way <- ggplot(l2fc_all_2way, 
+#        aes(x = YrMB, y = log2FoldChange, colour = BPhyFPhy, size = significant)) + 
+#   facet_grid(.~Term) +
+#   geom_hline(yintercept = 0, colour="grey30", size=1, linetype = 2) +
+#   geom_jitter( width = .3, height = 0) + #size = 1.5,
+#   scale_y_continuous(expression(paste("Log"[2]," Fold Change"))) +
+#   scale_x_discrete("Year and Microbial Domain") +
+#   scale_colour_manual("Phylum", values=taxa_col[c(1:14,16)], na.value= "grey60") +
+#   scale_size_manual(values=c("Significant"=3), na.value= 0.8) +
+#   guides(size = 'none')
+# 
+# #tiff("./figures/DA_2way-byPhylum.tiff", width=8, height=5, units="in", res=600)
+# DA_2way
+# #dev.off()
+
+l2fc_all_new <- bind_rows(l2fc_all_main, l2fc_all_2way)
+
+DA_effects <- ggplot(l2fc_all_new, 
+       aes(x = YrMB, y = log2FoldChange, colour = BPhyFPhy, size = significant)) + 
+  facet_grid(.~Term) +
+  geom_hline(yintercept = 0, colour="grey30", size=1, linetype = 2) +
+  geom_jitter( width = .3, height = 0) + #size = 1.5,
+  scale_y_continuous(expression(paste("Log"[2]," Fold Change"))) +
+  scale_x_discrete("Year and Microbial Domain") +
+  scale_colour_manual("Phylum", values=taxa_col, na.value= "grey60") +
+  scale_size_manual(values=c("Significant"=3), na.value= 0.8) +
+  guides(size = 'none', colour = guide_legend(override.aes = list(size=3)))
+
+#tiff("./figures/DA_all-byPhylum.tiff", width=11, height=4.5, units="in", res=600)
+DA_effects
+#dev.off()
+
+```
+-
+
+### CO2 by Collection Date 
+```{r, echo = FALSE, results = 'hide', fig.width = 6}
+l2fc_DxC_17 %>% 
+  filter(Contrast == 'Amb[Wk1-Wk2]' | Contrast == 'Amb[Wk2-Wk3]' |
+         Contrast == 'Elev[Wk1-Wk2]' | Contrast == 'Elev[Wk2-Wk3]') -> l2fc_DxC_17_sub
+
+l2fc_DxC_17 %>% 
+  filter(Contrast == 'Amb[Wk1-Wk2]' | Contrast == 'Amb[Wk1-Wk3]' |
+         Contrast == 'Elev[Wk1-Wk2]' | Contrast == 'Elev[Wk1-Wk3]') -> l2fc_DxC_17_sub
+
+l2fc_DxC_18 %>% 
+  filter(Contrast == 'Amb[Wk1-Wk2]' | Contrast == 'Amb[Wk2-Wk3]' | Contrast == 'Amb[Wk3-Wk4]' |
+         Contrast == 'Elev[Wk1-Wk2]' | Contrast == 'Elev[Wk2-Wk3]' | Contrast == 'Elev[Wk3-Wk4]') -> l2fc_DxC_18_sub
+
+
+l2fc_DxC_18 %>% 
+  filter(Contrast == 'Amb[Wk1-Wk2]' | Contrast == 'Amb[Wk1-Wk3]' | Contrast == 'Amb[Wk1-Wk4]' |
+         Contrast == 'Elev[Wk1-Wk2]' | Contrast == 'Elev[Wk1-Wk3]' | Contrast == 'Elev[Wk1-Wk4]') -> l2fc_DxC_18_sub
+
+
+```
+-
+
+```{r, echo = FALSE, results = 'hide', fig.width = 9}
+DA_DxC_17 <- ggplot(l2fc_DxC_17_sub , 
+       aes(x = Contrast, y = log2FoldChange, colour = BPhyFPhy, size = significant)) + 
+  facet_grid(.~YrMB) +
+  geom_hline(yintercept = 0, colour="grey30", size=1, linetype = 2) +
+  geom_jitter( width = .15, height = 0) + 
+  scale_y_continuous(expression(paste("Log"[2]," Fold Change"))) +
+  scale_x_discrete("Between Week Contrasts") +
+  #ggtitle("CO2 by Collection Date") +
+  scale_colour_manual("Phylum", values=taxa_col[c(1,3,4,6,7)], na.value= "grey60") +
+  scale_size_manual(values=("Significant"=3), na.value= 0.6) +
+  guides(size = 'none') +
+  theme(axis.text.x = element_text(angle = 60, vjust = 0.7, hjust=0.7))
+
+#tiff("./figures/DA_CO2xCollect_17.tiff", width=8, height=5, units="in", res=600)
+DA_DxC_17
+#dev.off()
+```
+
+-
+
+```{r, echo = FALSE, results = 'hide', fig.width = 9}
+DA_DxC_18 <- ggplot(l2fc_DxC_18_sub , 
+       aes(x = Contrast, y = log2FoldChange, colour = BPhyFPhy, size = significant)) + 
+  facet_grid(.~YrMB) +
+  geom_hline(yintercept = 0, colour="grey30", size=1, linetype = 2) +
+  geom_jitter( width = .15, height = 0) + 
+  scale_y_continuous(expression(paste("Log"[2]," Fold Change"))) +
+  scale_x_discrete("Between Week Contrasts") +
+  #ggtitle("CO2 by Collection Date") +
+  scale_colour_manual("Phylum", values=taxa_col, na.value= "grey60") +
+  scale_size_manual(values=("Significant"=3), na.value= 0.6) +
+  guides(size = 'none') +
+  theme(axis.text.x = element_text(angle = 60, vjust = 0.7, hjust=0.7))
+
+#tiff("./figures/DA_CO2xCollect_18.tiff", width=8.5, height=5, units="in", res=600)
+DA_DxC_18
+#dev.off()
+
+```
+-
+
+### CO2 Main effect - 2017 & 2018
+```{r, echo = FALSE, results = 'hide', fig.width = 9}
+DA_CO2 <- ggplot(l2fc_all_main[l2fc_all_main$Term == 'CO2',] , 
+       aes(x = Contrast, y = log2FoldChange, colour = BPhyFPhy, size = significant)) + 
+  facet_grid(.~YrMB) +
+  geom_hline(yintercept = 0, colour="grey30", size=1, linetype = 2) +
+  geom_jitter( width = .15, height = 0) + 
+  scale_y_continuous(expression(paste("Log"[2]," Fold Change"))) +
+  scale_x_discrete(expression(paste("CO"[2]," Contrast"))) +
+  #ggtitle("CO2") +
+  scale_colour_manual("", values=taxa_col[c(1:4,6:8)], na.value= "grey60") +
+  scale_size_manual(values=("Significant"=3), na.value= 0.6) +
+  guides(size = 'none') +
+  theme(axis.text.x = element_blank())
+    #element_text(angle = 60, vjust = 0.7, hjust=0.7)
+
+#tiff("./figures/DA_CO2.tiff", width=7, height=4, units="in", res=600)
+DA_CO2
+#dev.off()
+
+l2fc_all %>%
+    filter(padjadj < 0.05) %>%
+    filter(Term == 'DxC') %>%
+    filter(YrMB == "18b") %>%
+    group_by(CO2, Contrast) %>%
+    summarize(medianFC = median(abs(log2FoldChange), na.rm = TRUE), n=n()) %>% 
+    ungroup %>% as.data.frame -> out
+out    # this is the log2 fold change, no back transform
+
+```
+
+### NetFold Change across treatments and Years/Domains
+```{r, echo = FALSE, results = 'hide', fig.width = 9}
+DA_netFold <- ggplot(l2fc_all_signif, aes (x = YrMB, y = abs(log2FoldChange), color = YrMB)) +
+  #geom_boxplot(size =1.5, outlier.shape = NA) +
+  geom_violin(size =1.1) +
+  geom_jitter(size = 0.5, width = .15, height = 0, color = 'black') +
+  facet_wrap(.~Term, ncol = 3) + 
+  scale_color_manual("", values = brewer.pal(4, "PuOr")) +
+  scale_y_continuous(expression(paste("Net Log"[2]," Fold Change")) ) +
+  scale_x_discrete("")
+
+#tiff("./figures/DA_netFoldChanges.tiff", width=8.5, height=6, units="in", res=600)
+DA_netFold
+#dev.off()
+
+#Year and Microbial Kingdom Combinations
+#"attributed to\neach source of variation"
+
+```
+
+```{r, echo = FALSE, results = 'hide', fig.keep = 'none'}
+# ggplot() +
+#   geom_point(data = medianFCs, aes(x = YrMB, y = log2(medianFC), 
+#                 color = YrMB, group = Term), size = 4) +
+#   facet_grid(.~medianFCs$Term) +
+#   scale_color_manual("", values = brewer.pal(4, "PuOr")) +
+#   scale_y_continuous("Median Net Fold Changes attributed to\neach source of variation")+
+#   scale_x_discrete("Year and Microbial Kingdom Combinations")
+
+```
+
+## Figure for MS
+```{r, results = 'hide', echo = FALSE}
+p1 <- DA_netFold + guides(colour = 'none') + theme(axis.title.x=element_blank())
+p2 <- DA_CO2 + guides(colour = 'none')
+p3 <- DA_DxC_17 + guides(colour = 'none')
+p4 <- DA_DxC_18 + guides(colour = guide_legend(override.aes = list(size=3)))
+
+
+da_all <- ggarrange(p2, p1, p3, p4, 
+          ncol = 2, nrow = 2,
+          widths = c(1, 1.5), heights = c(1.3,1),
+          labels = c("A)", "B)", "C)", "D)"), 
+          label.args = list(gp=gpar(font=2, fontsize=16), 
+                            x=unit(1,"line"), hjust=-.5, vjust=1.5) )
+
+#tiff("./figures/Figure3_DA_results.tiff", width=280, height=150, units="mm", res=600)
+da_all
+#dev.off()
+
+
+# my_layout <- lapply(list(p2, p1, p3, p4), expose_layout, FALSE, FALSE)
+# grid.arrange(
+#     grobs = my_layout,
+#     widths = c(1, 1.5), heights = c(1.3,1),
+#     layout_matrix = rbind(c(1, 2), c(3, 4))  )
+
+
+```
+
+
+
+
+
+### 3b) Retrieve Taxa names
+* Manually saved output to txt file, imported to excel and formatted into a table to keep track of CO2 responsive taxa
+
+#### CO2 main
+```{r}
+# 17b
+co2_17b <- l2fc_all_main %>% filter(YrMB == "17b" &
+                                Term == "CO2" &
+                                significant =="Significant") %>% 
+  select(Taxon, log2FoldChange, Kingdom, Phylum, Class, Order, Family, Genus, Species, Contrast)
+
+#co2_17b
+
+# proportion of dataset they represent
+propReads <- colSums(ps_u_17b@otu_table@.Data[,as.character(co2_17b$Taxon)])/sum(colSums(ps_u_17b@otu_table@.Data))
+
+co2_17b <- data.frame(co2_17b, propReads, dataset= c("17b"))
+
+
+# used this code to figure out directionality of l2fc
+##ASV29 from 17b positive log2FoldChange to CO2 contrast
+#asv29.dat <- data.frame(data.frame(ps_u_17b@otu_table[,'ASV29']),
+#                        data.frame(ps_u_17b@sam_data[,'CO2']) )
+#asv29.dat %>% group_by(CO2) %>% summarize(sumAbund = sum(ASV29))
+##ASV29 more abund in ambient
+```
+
+
+```{r}
+# 17f
+co2_17f <- l2fc_all_main %>% filter(YrMB == "17f" &
+                                Term == "CO2" &
+                                significant =="Significant") %>% 
+  select(Taxon, log2FoldChange, Kingdom, Phylum, Class, Order, Family, Genus, Species, Contrast)
+
+#co2_17f
+# no 2017 fungi responsive to CO2
+
+```
+
+```{r}
+# 18b
+co2_18b <- l2fc_all_main %>% filter(YrMB == "18b" &
+                                Term == "CO2" &
+                                significant =="Significant") %>% 
+  select(Taxon, log2FoldChange, Kingdom, Phylum, Class, Order, Family, Genus, Species, Contrast)
+
+#co2_18b
+
+# proportion of dataset they represent
+propReads <- colSums(ps_u_18b@otu_table@.Data[,as.character(co2_18b$Taxon)])/sum(colSums(ps_u_18b@otu_table@.Data))
+
+co2_18b <- data.frame(co2_18b, propReads, dataset= c("18b"))
+
+
+```
+
+```{r}
+# 18f
+co2_18f <- l2fc_all_main %>% filter(YrMB == "18f" &
+                                Term == "CO2" &
+                                significant =="Significant") %>% 
+  select(Taxon, log2FoldChange, Kingdom, Phylum, Class, Order, Family, Genus, Species, Contrast)
+
+#co2_18f
+
+# proportion of dataset they represent
+propReads <- colSums(ps_u_18f@otu_table@.Data[,as.character(co2_18f$Taxon)])/sum(colSums(ps_u_18f@otu_table@.Data))
+
+co2_18f <- data.frame(co2_18f, propReads, dataset= c("18f"))
+
+```
+
+```{r, include = FALSE}
+co2 <- rbind(co2_17b, co2_17f, co2_18b, co2_18f)
+
+#write.csv(co2, "./tables/FACE_deseq_co2.csv")
+
+```
+
+
+
+#### CO2 x Collect Interaction
+```{r}
+# did coding much simpler here
+DxC_17b <- l2fc_DxC_17 %>% filter(YrMB == "17b" &
+                                Term == "DxC" &
+                                significant =="Significant") %>% 
+  select(Taxon, log2FoldChange, Kingdom, Phylum, Class, Order, Family, Genus, Species, CO2, Contrast)
+
+#DxC_17b
+
+# proportion of dataset they represent
+propReads <- colSums(ps_u_17b@otu_table@.Data[,as.character(DxC_17b$Taxon)])/sum(colSums(ps_u_17b@otu_table@.Data))
+
+DxC_17b <- data.frame(DxC_17b, propReads, dataset= c("17b"))
+
+
+
+# #ASV6  from 17b several log2FoldChange to DxC contrast
+# asv6.dat <- data.frame(data.frame(ps_u_17b@otu_table[,'ASV6']),
+#                         data.frame(ps_u_17b@sam_data[,c('CO2','collect') ]) )
+# 
+# asv6.dat %>% group_by(CO2, collect) %>% summarize(sumAbund = sum(ASV6))
+# 
+# l2fc_all_signif[l2fc_all_signif$YrMB == "17b" 
+#           & l2fc_all_signif$Term == "DxC" & l2fc_all_signif$Taxon == "ASV6", 
+#           c("Taxon", "log2FoldChange", "Contrast")]
+# 
+# #ASV6, what this shows is that the 'negative fold change' (in the elevated treatment only) indicates an increase in abundance from earlier weeks into subsequent weeks
+
+# extra
+table(DxC_17b$log2FoldChange[DxC_17b$CO2 == 'Ambient'] >0)  # more positive values in Amb  = more decreases in abundance over time
+table(DxC_17b$log2FoldChange[DxC_17b$CO2 == 'Elevated'] >0) # more negative values in Elev = more increases in abundance over time
+
+```
+
+```{r}
+DxC_18b <- l2fc_DxC_18 %>% filter(YrMB == "18b" &
+                                Term == "DxC" &
+                                significant =="Significant") %>% 
+  select(Taxon, log2FoldChange, Kingdom, Phylum, Class, Order, Family, Genus, Species, CO2, Contrast)
+
+#DxC_18b
+
+# proportion of dataset they represent
+propReads <- colSums(ps_u_18b@otu_table@.Data[,as.character(DxC_18b$Taxon)])/sum(colSums(ps_u_18b@otu_table@.Data))
+
+DxC_18b <- data.frame(DxC_18b, propReads, dataset= c("18b"))
+
+
+# # extra
+# table(DxC_18b$log2FoldChange[DxC_18b$CO2 == 'Ambient'] >0);  # many more negative than pos
+# table(DxC_18b$log2FoldChange[DxC_18b$CO2 == 'Elevated'] >0); # also many more negative than pos
+
+```
+
+
+```{r}
+DxC_17f <- l2fc_DxC_17 %>% filter(YrMB == "17f" &
+                                Term == "DxC" &
+                                significant =="Significant") %>% 
+  select(Taxon, log2FoldChange, Kingdom, Phylum, Class, Order, Family, Genus, Species, CO2, Contrast)
+
+#DxC_17f
+# only 2 taxa responsible, but ASV5 changed in two week-to-week, and in both ambinet and elevated combinations.
+
+# proportion of dataset they represent
+propReads <- colSums(ps_u_17f@otu_table@.Data[,as.character(DxC_17f$Taxon)])/sum(colSums(ps_u_17f@otu_table@.Data))
+
+DxC_17f <- data.frame(DxC_17f, propReads, dataset= c("17f"))
+
+
+
+```
+
+```{r}
+DxC_18f <- l2fc_DxC_18 %>% filter(YrMB == "18f" &
+                                Term == "DxC" &
+                                significant =="Significant") %>% 
+  select(Taxon, log2FoldChange, Kingdom, Phylum, Class, Order, Family, Genus, Species, CO2, Contrast)
+
+#DxC_18f
+
+
+# proportion of dataset they represent
+propReads <- colSums(ps_u_18f@otu_table@.Data[,as.character(DxC_18f$Taxon)])/sum(colSums(ps_u_18f@otu_table@.Data))
+
+DxC_18f <- data.frame(DxC_18f, propReads, dataset= c("18f"))
+
+
+
+# #ASV2  from 18f several log2FoldChange to DxC contrast
+# asv2.dat <- data.frame(data.frame(ps_u_18f@otu_table[,'ASV2']),
+#                         data.frame(ps_u_18f@sam_data[,c('CO2','collect') ]) )
+# 
+# asv2.dat %>% group_by(CO2, collect) %>% summarize(sumAbund = sum(ASV2))
+# 
+# l2fc_all_signif[l2fc_all_signif$YrMB == "18f" 
+#           & l2fc_all_signif$Term == "DxC" & l2fc_all_signif$Taxon == "ASV2", 
+#           c("Taxon", "log2FoldChange", "Contrast")]
+# 
+# #ASV2, what this shows is that the 'negative fold change' indicates an increase in abundance from earlier weeks into subsequent weeks (both amb and elev)
+```
+
+
+```{r, include = FALSE}
+DxC <- rbind(DxC_17b, DxC_17f, DxC_18b, DxC_18f)
+
+#write.csv(DxC, "./tables/FACE_deseq_DxC.csv")
+
+```
+
+# 4) Fusarium sequences
+```{r}
+# set up data for figures
+fusarium_18f <- subset_taxa(ps_u_18f, Genus=="g__Fusarium")
+names(refseq(fusarium_18f))
+fus_co2_18f <- c("ASV4", "ASV18")  #"ASV58", "ASV63", "ASV64", "ASV33", "ASV88"
+sample_data(ps_u_18f)$read_depth <- sample_sums(ps_u_18f)
+
+
+# bar plot 
+tiss_dat_18f <- data.frame(data.frame(ps_u_18f@otu_table[,colnames(ps_u_18f@otu_table) %in% fus_co2_18f]),
+                        data.frame(ps_u_18f@sam_data[,c('tissue', 'read_depth') ]) )
+tiss_sum_18f <- tiss_dat_18f %>% group_by(tissue) %>% summarize_all(sum)
+tiss_sum_18f$ASV4_depth <- tiss_sum_18f$ASV4/tiss_sum_18f$read_depth
+tiss_sum_18f$ASV18_depth <- tiss_sum_18f$ASV18/tiss_sum_18f$read_depth
+tiss_sum_18f$tissue <- recode_factor(tiss_sum_18f$tissue, 
+              "leaf" = "Leaf", 
+              "spike" = "Spike")
+tiss_sum_18f %>% select(tissue, ASV4_depth, ASV18_depth) -> tiss_sum_18f
+melt(tiss_sum_18f, id.vars = "tissue") -> tiss_melt_18f
+tiss_melt_18f$variable <- recode_factor(tiss_melt_18f$variable,
+              "ASV4_depth" = "ASV4",
+              "ASV18_depth" = "ASV18")
+
+tiss_1 <- ggplot(tiss_melt_18f, aes(x=tissue, y = value, color = variable, fill = variable))+
+    geom_bar(stat = "identity", position = "stack") +
+    scale_y_continuous("ASV Proportion") +
+    scale_x_discrete("Tissue") + 
+    scale_color_manual("", values = c("#66C2A5", "#FC8D62")) + 
+    scale_fill_manual("", values = c("#66C2A5", "#FC8D62")) +
+    theme(legend.position = "bottom")
+#tiff("./figures/DA_Fusarium_Tissue_18f.tiff", width=85, height=85, units="mm", res=600)
+tiss_1
+#dev.off()
+
+
+
+#writeFasta(refseq(fusarium_18f), "./data/fusarium_18f.fasta")
+```
+
+```{r, results = 'hide', echo = FALSE, fig.width = 8}
+fus_dat_18f <- data.frame(data.frame(ps_u_18f@otu_table[,colnames(ps_u_18f@otu_table) %in% fus_co2_18f]),
+                        data.frame(ps_u_18f@sam_data[,c('CO2','collect', 'read_depth') ]) )
+fus_sum_18f <- fus_dat_18f %>% group_by(CO2, collect) %>% summarize_all(sum)
+fus_sum_18f$ASV4_depth <- fus_sum_18f$ASV4/fus_sum_18f$read_depth
+fus_sum_18f$ASV18_depth <- fus_sum_18f$ASV18/fus_sum_18f$read_depth
+# fus_dat_18f <- data.frame(data.frame(ps_u_18f@otu_table[,colnames(ps_u_18f@otu_table) %in% fus_co2_18f]),
+#                         data.frame(ps_u_18f@sam_data[,c('CO2','collect') ]) )
+# fus_sum_18f <- fus_dat_18f %>% group_by(CO2, collect) %>% summarize_all(sum)
+fus_sum_18f$collect <- recode_factor(fus_sum_18f$collect, 
+              "2018_07_10" = "Wk1", 
+              "2018_07_17" = "Wk2", 
+              "2018_07_24" = "Wk3", 
+              "2018_07_31" = "Wk4")
+fus_sum_18f$CO2 <- recode_factor(fus_sum_18f$CO2, 
+              "Ambient" = "Amb", 
+              "Elevated" = "Elev")
+
+fus_1 <- ggplot(fus_sum_18f, aes(x=collect, y = ASV4_depth, color = CO2, group = CO2))+
+    geom_point() + geom_line() +
+    scale_color_manual(values =co2_color) + guides(color = 'none') +
+    annotate(geom="text", x=0.7, y=0.125, label="A)", cex=5) +
+    scale_y_continuous("ASV4 Proportion") + scale_x_discrete("Collection Week")
+fus_2 <- ggplot(fus_sum_18f, aes(x=collect, y = ASV18_depth, color = CO2, group = CO2))+
+    geom_point() + geom_line() + 
+    scale_color_manual(values =co2_color) + guides(color = 'none') +
+    annotate(geom="text", x=0.7, y=0.0133, label="B)", cex=5) +
+    scale_y_continuous("ASV18 Proportion") + scale_x_discrete("Collection Week")
+
+#tiff("./figures/DA_Fusarium_18f.tiff", width=180, height=80, units="mm", res=600)
+ggarrange(fus_1, fus_2,  widths = c(1,1))    #fus_2, fus_3, fus_4, fus_6, fus_7,
+#dev.off()
+
+```
+
+```{r}
+l2fc_all %>% filter(padjadj < 0.05) %>% filter(YrMB == "18f") %>% filter(Genus == "g__Fusarium") -> out
+table(out$ASV) # 10 ASVs significnatly respond
+out %>% filter(Term == "tissue") # 6 ASVs respond to tissue, 4 more abundant in spike, 2 more abundant in leaves
+out %>% filter(Term == "CO2") # 4 things respond
+out %>% filter(Term == "DxC") %>% droplevels() -> out2
+table(out2$Taxon)  # just 4 things respond to CO2 x Collection time interaction
+
+```
+
+
+# 5) Other interesting Taxa (by abundance and DxC results)
+```{r}
+##all taxa >1% seq reads with D-A in CO2 or DxC
+
+# 17b 
+# ASV2 Enterobacteriales >Amb
+# ASV5 Enterobacteriaceae >Amb, <time in Amb
+# ASV6 Curtobacterium >time Elev
+# ASV7 Enterobacteriaceae, time pattern changes Amb v Elev
+# ASV11 Enterobacteriaceae >Amb, <time
+# ASV12 Erwiniaceae >Amb
+# ASV13 Erwiniaceae >Amb
+# ASV15 Enterobacterales <time in both Amb Elev
+# ASV16 Erwiniaceae, <time Amb
+
+# 17f
+# ASV4 Sporobolomyces >time Elev
+# ASV5 Bipolaris >time both Amb Elev
+
+# 18b
+# ASV4 Neorhizobium, >time both Amb Elev
+# ASV5 Xanthomonas <time in Elev
+# ASV6 Sphingomonas >time both Amb Elev
+# ASV7 Pseudomonas >Elev, but >time Amb
+# ASV8 Sphingomonas >time both Amb Elev
+# ASV9 Chryseobacterium >time both Amb Elev
+# ASV10 Curtobacterium >time both Amb Elev
+# ASV11 Enterobacteriaceae  >time both Amb Elev
+# ASV12 Paenibacillus >Elev
+# ASV13 Microbacterium >time in Amb
+# ASV14 Mucilaginibacter >time both Amb Elev
+# ASV17 Pseudomonas >time in Elev
+# ASV18 Chryseobacterium >Amb, but >time in both Amb Elev
+
+# 18f 
+# ASV1 Moesziomyces sp  >Amb, but <time both Amb Elev
+#   #Moesziomyces = smut fungi that produce sori in the ovaries of grasses
+# ASV2 Bipolaris sp >time both Amb Elev
+# ASV4 Fusarium  >Time both Amb Elev
+# ASV5 Filobasidium >Amb, but <time both Amb Elev
+# ASV7 Moesziomyces only <time in Amb, first <time than >time in Elev
+# ASV8 Bipolaris >tiime both Amb Elev
+# ASV9 Neosetophoma >time both Amb Elev
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
+#### end
