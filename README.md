@@ -1,5 +1,5 @@
 # "Manipulating atmospheric CO2 concentration induces shift in wheat leaf and spike microbiome and Fusarium pathogen communities over time"
-### Bakker, M.G.*, Whitaker, B.K.*, McCormick, S.P., Ainsworth, E.A., Vaughan, M.M.
+### Bakker, M.G., Whitaker, B.K., McCormick, S.P., Ainsworth, E.A., Vaughan, M.M.
 
 DOI HERE
 
@@ -13,7 +13,7 @@ The metadata file ("Metadata.csv") includes information about each microbiome sa
 
 Detailed information about column headers in the Biomass/DON and Microbiome Metadata files can be found in the .xlsx file "FACE_Meta.xlsx".
 
-They R/Rmd files should be run in this order: FACE-Toxin-Biomass.Rmd > FACE_sequence_processing.R > FACE-Microbes-CommDiv.Rmd > FACE-Microbes-DA.Rmd. 
+The R/Rmd files should be run in this order: FACE-Toxin-Biomass.Rmd > FACE_sequence_processing.R > FACE-Microbes-CommDiv.Rmd > FACE-Microbes-DA.Rmd. 
 
 The /code folder contains the batch and R scripts necessary to run small codes inside R. Data necessary to run the analyses can be found in /data folder.
 
