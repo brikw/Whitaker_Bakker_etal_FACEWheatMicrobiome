@@ -1866,7 +1866,8 @@ p6 <- DxC_spike_18f + guides(colour = 'none', shape = 'none', linetype = 'none')
 ggarrange(p1, p2, p3, p4, p5, p6,
           widths = c(1,1), heights = c(1,1,1))
 #dev.off()
- 
+```
+```{r, fig.keep='none'}
 p7 <- tissue_17b + annotate(geom="text", x=-8.5, y=6, label="A)", cex=5)
 p8 <- tissue_17f + annotate(geom="text", x=-6.3, y=5.6, label="B)", cex=5)
 p9 <- tissue_18b + annotate(geom="text", x=-12.8, y=7.2, label="C)", cex=5)
@@ -1883,6 +1884,179 @@ ggarrange(p7, p8, p9, p10,
 #           DxC_leaf_18f, DxC_spike_18f, 
 #           cols = 2)
 
+```
+
+### Trajectory Plot
+```{r, fig.keep = 'none'}
+#require(ecotraj)
+
+#use pcdat_XX split by Tissue (to match figures)
+#Then, Split further by CO2 -> calculate/aggregate sums -> rename rows -> combine amb and elev data back together & add factors
+
+
+#Leaf 18b
+## amb
+amb_lf_18b <- pcdat_leaf_18b[pcdat_leaf_18b$CO2 == "Ambient",]
+sum_amb_lf_18b <- aggregate(amb_lf_18b[,c("V1","V2")], list(amb_lf_18b$collect), mean)
+rownames(sum_amb_lf_18b) <- paste("Amb", sum_amb_lf_18b[,1], sep="_")
+## elev
+ele_lf_18b <- pcdat_leaf_18b[pcdat_leaf_18b$CO2 == "Elevated",]
+sum_ele_lf_18b <- aggregate(ele_lf_18b[,c("V1","V2")], list(ele_lf_18b$collect), mean)
+rownames(sum_ele_lf_18b) <- paste("Elev", sum_ele_lf_18b[,1], sep="_")
+## combine
+lf_sum_18b<-rbind(sum_amb_lf_18b, sum_ele_lf_18b)
+lf_sum_18b$Group.1<-NULL
+lf_sum_18b$CO2 <- c(rep("Amb", 4), rep("Elev", 4))
+lf_sum_18b$date <- as.factor(c(rep(1:4,2)))
+
+#Spike 18b
+## amb
+amb_sp_18b <- pcdat_spike_18b[pcdat_spike_18b$CO2 == "Ambient",]
+sum_amb_sp_18b <- aggregate(amb_sp_18b[,c("V1","V2")], list(amb_sp_18b$collect), mean)
+rownames(sum_amb_sp_18b) <- paste("Amb", sum_amb_sp_18b[,1], sep="_")
+## elev
+ele_sp_18b <- pcdat_spike_18b[pcdat_spike_18b$CO2 == "Elevated",]
+sum_ele_sp_18b <- aggregate(ele_sp_18b[,c("V1","V2")], list(ele_sp_18b$collect), mean)
+rownames(sum_ele_sp_18b) <- paste("Elev", sum_ele_sp_18b[,1], sep="_")
+## combine
+sp_sum_18b<-rbind(sum_amb_sp_18b, sum_ele_sp_18b)
+sp_sum_18b$Group.1<-NULL
+sp_sum_18b$CO2 <- c(rep("Amb", 4), rep("Elev", 4))
+sp_sum_18b$date <- as.factor(c(rep(1:4,2)))
+
+
+
+#Leaf 18f
+## amb
+amb_lf_18f <- pcdat_leaf_18f[pcdat_leaf_18f$CO2 == "Ambient",]
+sum_amb_lf_18f <- aggregate(amb_lf_18f[,c("V1","V2")], list(amb_lf_18f$collect), mean)
+rownames(sum_amb_lf_18f) <- paste("Amb", sum_amb_lf_18f[,1], sep="_")
+## elev
+ele_lf_18f <- pcdat_leaf_18f[pcdat_leaf_18f$CO2 == "Elevated",]
+sum_ele_lf_18f <- aggregate(ele_lf_18f[,c("V1","V2")], list(ele_lf_18f$collect), mean)
+rownames(sum_ele_lf_18f) <- paste("Elev", sum_ele_lf_18f[,1], sep="_")
+## combine
+lf_sum_18f<-rbind(sum_amb_lf_18f, sum_ele_lf_18f)
+lf_sum_18f$Group.1<-NULL
+lf_sum_18f$CO2 <- c(rep("Amb", 4), rep("Elev", 4))
+lf_sum_18f$date <- as.factor(c(rep(1:4,2)))
+
+#Spike 18f
+## amb
+amb_sp_18f <- pcdat_spike_18f[pcdat_spike_18f$CO2 == "Ambient",]
+sum_amb_sp_18f <- aggregate(amb_sp_18f[,c("V1","V2")], list(amb_sp_18f$collect), mean)
+rownames(sum_amb_sp_18f) <- paste("Amb", sum_amb_sp_18f[,1], sep="_")
+## elev
+ele_sp_18f <- pcdat_spike_18f[pcdat_spike_18f$CO2 == "Elevated",]
+sum_ele_sp_18f <- aggregate(ele_sp_18f[,c("V1","V2")], list(ele_sp_18f$collect), mean)
+rownames(sum_ele_sp_18f) <- paste("Elev", sum_ele_sp_18f[,1], sep="_")
+## combine
+sp_sum_18f<-rbind(sum_amb_sp_18f, sum_ele_sp_18f)
+sp_sum_18f$Group.1<-NULL
+sp_sum_18f$CO2 <- c(rep("Amb", 4), rep("Elev", 4))
+sp_sum_18f$date <- as.factor(c(rep(1:4,2)))
+
+
+
+##### Figures
+
+# 2018 B
+traj_lf_18b <- ggplot(lf_sum_18b, aes(x=V1, y = V2, shape = CO2, colour = date)) +
+    geom_point(size = 6) +
+    scale_color_manual("Week", values = leaf_collect_color) +
+    scale_shape_manual(values = c(15,7)) +
+    geom_segment(data=lf_sum_18b, aes(xend = lead(lf_sum_18b$V1),
+                                      yend = lead(lf_sum_18b$V2),
+                                      alpha = date ) ,
+                 colour = c(leaf_collect_color[1:3], "white", 
+                            leaf_collect_color[1:3], "white" ),
+                 arrow = arrow(length = unit(2, "mm")), size = 1.2) +
+    scale_x_continuous(paste("PCoA 1 (", var1_leaf_18b, "%)", sep = ""),
+                       limits = c(-11,11)) + 
+    scale_y_continuous(paste("PCoA 2 (", var2_leaf_18b, "%)", sep = ""),
+                       limits = c(-6.1,6.3)) +
+    scale_alpha_manual("Week", values = c(1,1,1,0,1,1,1,0)) +
+    annotate(geom="text", x= c(lf_sum_18b$V1+1.5), y= lf_sum_18b$V2, 
+             label= c("1", "2", "3", "4",  "1", "2", "3", "4"), cex=5)
+traj_sp_18b <- ggplot(sp_sum_18b, aes(x=V1, y = V2, shape = CO2, colour = date)) +
+    geom_point(size = 6) +
+    scale_color_manual("Week", values = collect_color) +
+    scale_shape_manual(values = c(15,7)) +
+    geom_segment(data=sp_sum_18b, aes(xend = lead(sp_sum_18b$V1),
+                                      yend = lead(sp_sum_18b$V2),
+                                      alpha = date ) ,
+                 colour = c(collect_color[1:3], "white", 
+                            collect_color[1:3], "white" ),
+                 arrow = arrow(length = unit(2, "mm")), size = 1.2) +
+    scale_x_continuous(paste("PCoA 1 (", var1_spike_18b, "%)", sep = ""),
+                       limits = c(-9,8)) + 
+    scale_y_continuous(paste("PCoA 2 (", var2_spike_18b, "%)", sep = ""),
+                       limits = c(-5,5.5), breaks = c(-5,-2.5,0,2.5,5)) +
+    scale_alpha_manual("Week", values = c(1,1,1,0,1,1,1,0)) +
+    annotate(geom="text", x= c(sp_sum_18b$V1+1.3), y= sp_sum_18b$V2, 
+             label= c("1", "2", "3", "4",  "1", "2", "3", "4"), cex=5)
+# 2018 F
+traj_lf_18f <- ggplot(lf_sum_18f, aes(x=V1, y = V2, shape = CO2, colour = date)) +
+    geom_point(size = 6) +
+    scale_color_manual("Week", values = leaf_collect_color) +
+    scale_shape_manual(values = c(15,7)) +
+    geom_segment(data=lf_sum_18f, aes(xend = lead(lf_sum_18f$V1),
+                                      yend = lead(lf_sum_18f$V2),
+                                      alpha = date ) ,
+                 colour = c(leaf_collect_color[1:3], "white", 
+                            leaf_collect_color[1:3], "white" ),
+                 arrow = arrow(length = unit(2, "mm")), size = 1.2) +
+    scale_x_continuous(paste("PCoA 1 (", var1_leaf_18f, "%)", sep = ""),
+                       limits = c(-10,12)) + 
+    scale_y_continuous(paste("PCoA 2 (", var2_leaf_18f, "%)", sep = ""),
+                       limits = c(-8,7)) +
+    scale_alpha_manual("Week", values = c(1,1,1,0,1,1,1,0)) +
+    annotate(geom="text", x= c(lf_sum_18f$V1+1.5), y= lf_sum_18f$V2, 
+             label= c("1", "2", "3", "4",  "1", "2", "3", "4"), cex=5)
+traj_sp_18f <- ggplot(sp_sum_18f, aes(x=V1, y = V2, shape = CO2, colour = date)) +
+    geom_point(size = 6) +
+    scale_color_manual("Week", values = collect_color) +
+    scale_shape_manual(values = c(15,7)) +
+    geom_segment(data=sp_sum_18f, aes(xend = lead(sp_sum_18f$V1),
+                                      yend = lead(sp_sum_18f$V2),
+                                      alpha = date ) ,
+                 colour = c(collect_color[1:3], "white", 
+                            collect_color[1:3], "white" ),
+                 arrow = arrow(length = unit(2, "mm")), size = 1.2) +
+    scale_x_continuous(paste("PCoA 1 (", var1_spike_18f, "%)", sep = ""),
+                       limits = c(-10.5,9)) + 
+    scale_y_continuous(paste("PCoA 2 (", var2_spike_18f, "%)", sep = ""),
+                       limits = c(-12,8)) +
+    scale_alpha_manual("Week", values = c(1,1,1,0,1,1,1,0)) +
+    annotate(geom="text", x= c(sp_sum_18f$V1+1.5), y= sp_sum_18f$V2, 
+             label= c("1", "2", "3", "4",  "1", "2", "3", "4"), cex=5)
+
+# # used to get limits
+# min(pcdat_leaf_18b$V1)
+# max(pcdat_leaf_18b$V1)
+# min(pcdat_leaf_18b$V2)
+# max(pcdat_leaf_18b$V2)
+
+# # for legends
+# traj_lf_18b + guides(alpha = 'none') + 
+#     theme(legend.position = "bottom")
+# traj_sp_18b + guides(alpha = 'none') + 
+#     theme(legend.position = "bottom")
+
+t3 <- traj_lf_18b + guides(colour = 'none', shape = 'none', alpha = 'none') + 
+    annotate(geom="text", x=-8, y=5.6, label="A) Leaves\n18b", cex=5)
+t4 <- traj_sp_18b + guides(colour = 'none', shape = 'none', alpha = 'none') + 
+    annotate(geom="text", x=-6.7, y=5, label="B) Spikes\n18b", cex=5)
+t5 <- traj_lf_18f + guides(colour = 'none', shape = 'none', alpha = 'none') + 
+    annotate(geom="text", x=-6.7, y=5.8, label="C) Leaves\n18f", cex=5)
+t6 <- traj_sp_18f + guides(colour = 'none', shape = 'none', alpha = 'none') + 
+    annotate(geom="text", x=-7.7, y=6.4, label="D) Spikes\n18f", cex=5)
+
+
+#tiff("./figures/Trajectory_2018_PCoA.tiff", width = 180, height = 175, units = "mm", res = 600)
+ggarrange(t3, t4, t5, t6,
+          widths = c(1,1), heights = c(1,1))
+#dev.off()
 ```
 
 
