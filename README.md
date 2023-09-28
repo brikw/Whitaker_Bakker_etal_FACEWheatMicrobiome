@@ -1,7 +1,7 @@
 # "Manipulating atmospheric CO2 concentration induces shift in wheat leaf and spike microbiome and Fusarium pathogen communities over time"
 ### Bakker, M.G., Whitaker, B.K., McCormick, S.P., Ainsworth, E.A., Vaughan, M.M.
 
-[![DOI](https://zenodo.org/badge/673108523.svg)](https://zenodo.org/badge/latestdoi/673108523)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.8387806.svg)](https://doi.org/10.5281/zenodo.8387806)
 
 This repository includes the R code, data files, small scripts, and a meta file to supplement the manuscript by Bakker & Whitaker et al. "Manipulating atmospheric CO2 concentration induces shift in wheat leaf and spike microbiome and Fusarium pathogen communities over time".
 
